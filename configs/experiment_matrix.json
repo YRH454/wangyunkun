@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "status": "proposed_not_executed",
+  "smoke": {
+    "purpose": "pipeline_debug_only_not_a_comparative_result",
+    "datasets": ["afqmc_local"],
+    "labeled_fractions": [0.3],
+    "training_seeds": [11],
+    "methods": ["esim_ce", "staged_pair_contrastive"]
+  },
+  "core": {
+    "purpose": "resource_aware_first_comparison_after_all_gates",
+    "datasets": ["agriculture_local", "afqmc_local"],
+    "labeled_fractions": [0.1, 0.3, 0.5],
+    "training_seeds": [11, 23, 37, 47, 59],
+    "methods": ["esim_ce", "staged_pair_contrastive", "esim_self_training", "esim_consistency", "bert_base_zh", "small_zh"]
+  },
+  "full": {
+    "purpose": "extended_benchmark_not_assumed_necessary_for_first_run",
+    "datasets": ["agriculture_local", "lcqmc_local", "pawsx_local", "afqmc_local"],
+    "labeled_fractions": [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5],
+    "training_seeds": [11, 23, 37, 47, 59],
+    "methods": ["esim_ce", "esim_ce_scl", "staged_pair_contrastive", "esim_self_training", "esim_consistency", "bert_base_zh", "small_zh"]
+  },
+  "extensions": {
+    "purpose": "optional_additional_unlabeled_training_routes_after_core",
+    "datasets": ["agriculture_local", "afqmc_local"],
+    "labeled_fractions": [0.1, 0.3, 0.5],
+    "training_seeds": [11, 23, 37, 47, 59],
+    "methods": ["esim_mean_teacher", "pair_dropout_pretraining", "bert_domain_adaptation"]
+  },
+  "ablation_conditions": [
+    {"id": "A0", "stage1": "CE", "stage2": "CE", "unlabeled_pool": "none", "mask": "none"},
+    {"id": "A1", "stage1": "CE+SCL", "stage2": "CE", "unlabeled_pool": "none", "mask": "none"},
+    {"id": "A2", "stage1": "CE", "stage2": "CE+UL", "unlabeled_pool": "training_U", "mask": "term_exclusion"},
+    {"id": "A3", "stage1": "CE+SCL", "stage2": "CE+UL", "unlabeled_pool": "training_U", "mask": "term_exclusion"},
+    {"id": "A4", "stage1": "CE+SCL+UL", "stage2": "none", "unlabeled_pool": "training_U", "mask": "term_exclusion"},
+    {"id": "A5", "stage1": "CE+SCL", "stage2": "CE+UL", "unlabeled_pool": "labeled_training_views_only", "mask": "term_exclusion"},
+    {"id": "A6", "stage1": "CE+SCL", "stage2": "CE+UL", "unlabeled_pool": "training_U", "mask": "random_strength_matched"},
+    {"id": "A7", "stage1": "CE+SCL", "stage2": "CE+UL", "unlabeled_pool": "training_U_size_sweep", "mask": "term_exclusion"},
+    {"id": "A8", "stage1": "CE+UL", "stage2": "CE+SCL", "unlabeled_pool": "training_U", "mask": "term_exclusion"}
+  ],
+  "ablation_ldp": [0.1, 0.3, 0.5],
+  "unlabeled_size_fractions": [0.25, 0.5, 1.0],
+  "note": "Conditions require implementations, audited data, rights and a fixed budget; a list of configurations is not experimental evidence."
+}

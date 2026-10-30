@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "status": "proposed_not_executed",
+  "mask_sensitivity": {
+    "probabilities": [0.1, 0.3, 0.5, 0.75, 1.0],
+    "selection_split": "validation_only",
+    "reference_ldp": 0.3,
+    "candidate_unit": "shared_unique_character_type_absent_from_all_protected_spans",
+    "term_protection": "mark_every_character_in_matched_term_spans_then_exclude_any_type_with_a_protected_occurrence",
+    "replacement": "replace_every_occurrence_of_selected_types_in_both_texts",
+    "rounding_rule": "floor(probability_times_eligible_unique_tokens_plus_0.5)",
+    "empty_or_unchanged_view": "exclude_from_unsupervised_loss_and_log_count",
+    "do_not_use_test_to_choose_probability": true
+  },
+  "sentence_length": {
+    "measurement": "mean_unicode_character_length_of_two_texts_before_truncation",
+    "intervals_left_closed_right_open": [0, 5, 10, 15, 20, 25, null],
+    "report_pair_count_and_positive_count": true,
+    "confidence_interval": "paired_group_bootstrap_when_independent_groups_available"
+  },
+  "tsne": {
+    "role": "descriptive_only",
+    "sample_max": 1000,
+    "same_sample_ids_across_models": true,
+    "input_layer": "pair_representation_before_classification",
+    "perplexity": 30,
+    "perplexity_must_be_less_than_number_of_samples": true,
+    "learning_rate": 200,
+    "initialization": "pca",
+    "iterations": 1000,
+    "random_seed": 42
+  },
+  "latency": {
+    "device": "cpu",
+    "batch_size": 1,
+    "intraop_threads": 1,
+    "interop_threads": 1,
+    "warmup_runs": 100,
+    "timed_runs": 1000,
+    "lengths": [32, 64, 128],
+    "report": ["median_ms", "p95_ms", "minimum_ms"],
+    "model_only_and_end_to_end_separate": true
+  },
+  "bootstrap": {
+    "resamples": 2000,
+    "seed": 20261030,
+    "pair_models_on_same_test_units": true,
+    "resample_unit": "independent_source_or_sentence_group_when_available"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "status": "candidate_methods_not_implemented",
+  "models": [
+    {"id": "esim_ce", "family": "BiLSTM_ESIM", "objective": "CE_on_labeled", "pretrained_checkpoint": null},
+    {"id": "esim_ce_scl", "family": "BiLSTM_ESIM", "objective": "CE_plus_supervised_contrastive_on_labeled", "pretrained_checkpoint": null},
+    {"id": "staged_pair_contrastive", "family": "BiLSTM_ESIM", "objective": "stage1_CE_plus_SCL_then_stage2_CE_plus_masked_view_UL", "pretrained_checkpoint": null},
+    {"id": "esim_self_training", "family": "BiLSTM_ESIM", "objective": "pseudo_label_or_self_training_same_L_and_U", "pretrained_checkpoint": null},
+    {"id": "esim_consistency", "family": "BiLSTM_ESIM", "objective": "confidence_filtered_weak_strong_consistency_same_L_and_U", "pretrained_checkpoint": null},
+    {"id": "esim_mean_teacher", "family": "BiLSTM_ESIM", "objective": "ema_teacher_consistency_same_L_and_U", "pretrained_checkpoint": null},
+    {"id": "pair_dropout_pretraining", "family": "BiLSTM_ESIM", "objective": "pair_dropout_contrastive_pretrain_U_then_CE_L", "pretrained_checkpoint": null},
+    {
+      "id": "bert_base_zh",
+      "family": "transformer_cross_encoder",
+      "objective": "CE_on_labeled",
+      "pretrained_checkpoint": "google-bert/bert-base-chinese",
+      "revision": "8f23c25b06e129b6c986331a13d8d025a92cf0ea",
+      "reported_model_card_license": "apache-2.0"
+    },
+    {
+      "id": "roberta_wwm_zh",
+      "family": "transformer_cross_encoder",
+      "objective": "CE_on_labeled",
+      "pretrained_checkpoint": "hfl/chinese-roberta-wwm-ext",
+      "revision": "5c58d0b8ec1d9014354d691c538661bf00bfdb44",
+      "reported_model_card_license": "apache-2.0"
+    },
+    {
+      "id": "small_zh",
+      "family": "transformer_cross_encoder",
+      "objective": "CE_on_labeled",
+      "pretrained_checkpoint": "uer/chinese_roberta_L-4_H-512",
+      "revision": "f22b50972cc3cf472c6cdfdd71ca2635dfbd434c",
+      "reported_model_card_license": "not_stated_in_api_metadata_verify_before_use"
+    },
+    {
+      "id": "bert_domain_adaptation",
+      "family": "transformer_cross_encoder",
+      "objective": "masked_language_modeling_on_training_U_then_CE_L",
+      "pretrained_checkpoint": "google-bert/bert-base-chinese",
+      "revision": "8f23c25b06e129b6c986331a13d8d025a92cf0ea",
+      "reported_model_card_license": "apache-2.0"
+    }
+  ],
+  "model_metadata_checked_utc_date": "2026-10-30",
+  "rights_note": "A model-card field is not legal advice; review each model and data license before use."
+}

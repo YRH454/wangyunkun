@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "status": "proposed_not_implemented",
+  "esim_self_training": {
+    "teacher_source": "best_stage1_CE_checkpoint_frozen_for_one_pseudolabel_pass",
+    "confidence_threshold": 0.95,
+    "pseudo_label_weight": 0.5,
+    "training_U_only_and_original_labels_removed": true
+  },
+  "esim_consistency": {
+    "weak_view": "original_pair",
+    "strong_view": "specified_masking_perturbation",
+    "confidence_threshold": 0.95,
+    "consistency_loss": "cross_entropy_on_detached_weak_prediction",
+    "unlabeled_loss_weight": 0.5
+  },
+  "esim_mean_teacher": {
+    "teacher_initialization": "copy_student_at_stage_transition",
+    "teacher_ema_after_optimizer_step": 0.999,
+    "weak_view": "original_pair",
+    "strong_view": "specified_masking_perturbation",
+    "consistency_loss": "mean_squared_error_between_class_probabilities",
+    "unlabeled_loss_weight": 0.5
+  },
+  "pair_dropout_pretraining": {
+    "stage1": "pair_encoder_train_on_two_independent_dropout_views_of_training_U",
+    "stage2": "supervised_CE_on_training_L",
+    "contrastive_temperature": 0.05,
+    "batch_scope": "micro_batch",
+    "not_official_simcse_implementation": true
+  },
+  "bert_domain_adaptation": {
+    "stage1": "masked_language_modeling_on_texts_from_training_U",
+    "stage2": "supervised_pair_classification_CE_on_training_L",
+    "mlm_probability": 0.15,
+    "special_tokens_never_masked": true,
+    "tokenizer_and_checkpoint_revision_must_match": true
+  },
+  "llm_optional": {
+    "enabled": false,
+    "model_checkpoint": null,
+    "revision": null,
+    "quantization": null,
+    "prompt_template": null,
+    "label_parser": null,
+    "reason": "No checkpoint, license, data exposure or hardware feasibility established."
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "status": "local_candidates_unverified_not_distributed",
+  "dataset_root": "SET_LOCALLY_TO_THE_DIRECTORY_CONTAINING_Agriculture9_S",
+  "common": {
+    "format": "jsonl",
+    "encoding": "utf-8-sig",
+    "text_fields": ["sentence1", "sentence2"],
+    "label_field": "gold_label",
+    "label_mapping": {"0": "non_match", "1": "match", "-1": "unlabeled"},
+    "integer_or_string_labels": true,
+    "unlabeled_label_visibility": "mask_before_any_model_or_sampler_access",
+    "vocabulary_fit_scope": "training_only_after_split",
+    "data_license": "unknown_must_verify_locally",
+    "exact_audit_normalization": "NFKC_remove_unicode_whitespace_preserve_case",
+    "generated_unlabeled_quality_audit": {
+      "status": "proposed_not_executed",
+      "population": "locked_final_generated_unlabeled_pool_after_documented_filtering",
+      "sampling": "simple_random_without_replacement",
+      "sample_size": "min(500, available_records)",
+      "seed": 20261030,
+      "reviewers": "two_independent_domain_reviewers_then_adjudicate_disagreements",
+      "criteria": ["comprehensible_text", "task_relevance", "pair_relation_judgable"],
+      "uncertainty": "95_percent_Wilson_only_if_independent_binomial_assumptions_are_reasonable_otherwise_report_group_aware_limitations",
+      "privacy": "raw_text_and_item_level_annotations_stay_local",
+      "note": "Quality judgement does not establish pair match or pseudo_label_accuracy."
+    }
+  },
+  "datasets": [
+    {
+      "id": "agriculture_local",
+      "folder": "Agriculture9_S",
+      "train": "train_50.txt",
+      "supervised_reference": "train_sup_50.txt",
+      "validation": "dev.txt",
+      "test": "test.txt",
+      "alternate_test_not_auto_selected": "test2.txt",
+      "unlabeled_policy": "only_records_marked_minus_1_after_audit",
+      "provenance_and_final_paper_version": "unknown",
+      "official_benchmark": false
+    },
+    {
+      "id": "lcqmc_local",
+      "folder": "LCQMC_S",
+      "train": "train.txt",
+      "supervised_reference": "train_sup.txt",
+      "validation": "dev.txt",
+      "test": "test.txt",
+      "unlabeled_policy": "training_pool_minus_labeled_subset_then_remove_labels",
+      "provenance_and_official_split": "unverified"
+    },
+    {
+      "id": "pawsx_local",
+      "folder": "PAWSX_S",
+      "train": "train.txt",
+      "supervised_reference": "train_sup.txt",
+      "validation": "dev.txt",
+      "test": "test.txt",
+      "alternate_test_not_auto_selected": "test1.txt",
+      "unlabeled_policy": "training_pool_minus_labeled_subset_then_remove_labels",
+      "provenance_and_official_split": "unverified"
+    },
+    {
+      "id": "afqmc_local",
+      "folder": "AFQMC_S",
+      "train": "train.txt",
+      "supervised_reference": "train_sup.txt",
+      "validation": "dev.txt",
+      "test": "test.txt",
+      "unlabeled_policy": "training_pool_minus_labeled_subset_then_remove_labels",
+      "provenance_and_official_split": "unverified"
+    }
+  ]
+}
