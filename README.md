@@ -6,7 +6,7 @@
 
 - 基于本地文件结构的**数据配置**，以及实验、模型、硬件和消融的机器可读 JSON 配置。
 - 面向 Windows 和单 GPU 的**完整实验方案**，包括分组划分、数据泄漏检查、基线、统计、硬件测量和记录模板。
-- 独立编写的本地只读数据审计工具、配置一致性检查和合成数据单元测试。
+- 独立编写的数据审计、分组防泄漏划分、标注比例采样工具和合成数据单元测试；原始输入只读，生成的数据仅保存本地。
 
 **当前没有训练器、模型权重或实际训练结果。** 配置是可审查的实验计划，不是可直接执行训练的完整工程；`python scripts/validate_configs.py` 成功只说明配置结构一致，不表示实验可开始或数据已经安全。
 
@@ -56,5 +56,12 @@ $LASTEXITCODE
 5. [Windows 目标服务器与运行环境](docs/05_windows_environment.md)
 6. [检查清单与待确认事项](docs/06_checklist.md)
 7. [实验关注点与方案对照](docs/07_experiment_coverage.md)
+8. [防泄漏划分与标注比例采样：操作说明](docs/08_clean_split_workflow.md)
 
 配置清单：[数据集](configs/datasets.json)、[训练协议](configs/protocol.json)、[模型候选](configs/models.json)、[基线参数](configs/baseline_protocols.json)、[实验矩阵](configs/experiment_matrix.json)、[分析配置](configs/analysis_plan.json)、[目标服务器](configs/target_server.json)。所有路径是相对于用户本地数据根目录的说明，不会从互联网自动下载或复制数据。
+
+## 本地生成新划分
+
+确认有权处理数据后，按照[操作说明](docs/08_clean_split_workflow.md)执行 `scripts/prepare_clean_split.py`，再用 `scripts/verify_clean_split.py` 重新读取并复核；需要不同标注比例时使用 `scripts/create_ldp_subset.py`。输出放在被忽略的 `data/` 下，不会覆盖原始文件或已有输出。
+
+这些程序建立的是**新的重划分实验**，不能当成原论文或官方基准的原测试集结果；检查仅覆盖确切重复和定义的字符近重复，不保证语义、来源或模型预训练层面的完全独立。`scripts/review_near_candidates.py` 可导出相似度较低的本地候选供人工复核，不自动决定或删除样本。
