@@ -6,9 +6,10 @@
 
 - 基于本地文件结构的**数据配置**，以及实验、模型、硬件和消融的机器可读 JSON 配置。
 - 面向 Windows 和单 GPU 的**完整实验方案**，包括分组划分、数据泄漏检查、基线、统计、硬件测量和记录模板。
-- 独立编写的数据审计、分组防泄漏划分、标注比例采样工具和合成数据单元测试；原始输入只读，生成的数据仅保存本地。
+- 独立编写的数据审计、分组防泄漏划分、标注比例采样工具；原始输入只读，生成的数据仅保存本地。
+- 独立实现的字符级 ESIM 风格训练器：监督对照、两阶段对比、A0—A8、自训练与一致性对照，以及本地预测、基础统计和 CPU 延迟测量。只经过合成数据功能测试。
 
-**当前没有训练器、模型权重或实际训练结果。** 配置是可审查的实验计划，不是可直接执行训练的完整工程；`python scripts/validate_configs.py` 成功只说明配置结构一致，不表示实验可开始或数据已经安全。
+**当前没有原作者的训练代码、真实实验结果或已经验证的目标服务器运行记录。** 训练代码是根据本项目协议独立实现的，不保证与原论文完全一致。部分基线和统计仍未实现；`python scripts/validate_configs.py` 成功只说明配置结构一致，不表示实验可以开始或数据已经安全。
 
 ## 重要边界
 
@@ -20,7 +21,7 @@
 
 ## 快速开始：先检查，再训练
 
-在仓库根目录使用 PowerShell。以下检查只依赖 Python 标准库，不下载依赖或启动训练；Python 3.10 及以上均可用于这些检查。
+在仓库根目录使用 PowerShell。数据审计检查只依赖 Python 标准库；若环境安装了 PyTorch，单元测试还会在临时合成数据上训练小模型，未安装时这些训练测试会跳过。不会读取本地真实数据或下载依赖；Python 3.10 及以上可用于数据审计。
 
 ```powershell
 python -B scripts/validate_configs.py
@@ -57,6 +58,7 @@ $LASTEXITCODE
 6. [检查清单与待确认事项](docs/06_checklist.md)
 7. [实验关注点与方案对照](docs/07_experiment_coverage.md)
 8. [防泄漏划分与标注比例采样：操作说明](docs/08_clean_split_workflow.md)
+9. [独立训练器：功能、边界和运行方法](docs/09_training_implementation.md)
 
 配置清单：[数据集](configs/datasets.json)、[训练协议](configs/protocol.json)、[模型候选](configs/models.json)、[基线参数](configs/baseline_protocols.json)、[实验矩阵](configs/experiment_matrix.json)、[分析配置](configs/analysis_plan.json)、[目标服务器](configs/target_server.json)。所有路径是相对于用户本地数据根目录的说明，不会从互联网自动下载或复制数据。
 

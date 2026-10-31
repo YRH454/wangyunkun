@@ -42,5 +42,5 @@
   ],
   "ablation_ldp": [0.1, 0.3, 0.5],
   "unlabeled_size_fractions": [0.25, 0.5, 1.0],
-  "note": "Conditions require implementations, audited data, rights and a fixed budget; a list of configurations is not experimental evidence."
+  "note": "A0-A8 have independent synthetic-tested code paths; real runs require audited data, rights, a term lexicon where applicable and fixed budgets. A configuration list is not experimental evidence."
 }

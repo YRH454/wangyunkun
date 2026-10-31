@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "status": "candidate_methods_not_implemented",
+  "status": "partially_implemented_independently_synthetic_tests_only",
   "models": [
-    {"id": "esim_ce", "family": "BiLSTM_ESIM", "objective": "CE_on_labeled", "pretrained_checkpoint": null},
-    {"id": "esim_ce_scl", "family": "BiLSTM_ESIM", "objective": "CE_plus_supervised_contrastive_on_labeled", "pretrained_checkpoint": null},
-    {"id": "staged_pair_contrastive", "family": "BiLSTM_ESIM", "objective": "stage1_CE_plus_SCL_then_stage2_CE_plus_masked_view_UL", "pretrained_checkpoint": null},
-    {"id": "esim_self_training", "family": "BiLSTM_ESIM", "objective": "pseudo_label_or_self_training_same_L_and_U", "pretrained_checkpoint": null},
-    {"id": "esim_consistency", "family": "BiLSTM_ESIM", "objective": "confidence_filtered_weak_strong_consistency_same_L_and_U", "pretrained_checkpoint": null},
+    {"id": "esim_ce", "family": "BiLSTM_ESIM", "objective": "CE_on_labeled", "pretrained_checkpoint": null, "runner_condition": "ce"},
+    {"id": "esim_ce_scl", "family": "BiLSTM_ESIM", "objective": "CE_plus_supervised_contrastive_on_labeled", "pretrained_checkpoint": null, "runner_condition": "ce_scl"},
+    {"id": "staged_pair_contrastive", "family": "BiLSTM_ESIM", "objective": "stage1_CE_plus_SCL_then_stage2_CE_plus_masked_view_UL", "pretrained_checkpoint": null, "runner_condition": "A3"},
+    {"id": "esim_self_training", "family": "BiLSTM_ESIM", "objective": "pseudo_label_or_self_training_same_L_and_U", "pretrained_checkpoint": null, "runner_condition": "self_train"},
+    {"id": "esim_consistency", "family": "BiLSTM_ESIM", "objective": "confidence_filtered_weak_strong_consistency_same_L_and_U", "pretrained_checkpoint": null, "runner_condition": "consistency"},
     {"id": "esim_mean_teacher", "family": "BiLSTM_ESIM", "objective": "ema_teacher_consistency_same_L_and_U", "pretrained_checkpoint": null},
     {"id": "pair_dropout_pretraining", "family": "BiLSTM_ESIM", "objective": "pair_dropout_contrastive_pretrain_U_then_CE_L", "pretrained_checkpoint": null},
     {

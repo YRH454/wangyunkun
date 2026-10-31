@@ -75,7 +75,7 @@ def validate() -> list[str]:
     if train["transformer_micro_batch"] * train["transformer_accumulation_steps"] != train["effective_optimizer_batch_size"]:
         errors.append("Transformer effective batch inconsistent")
     if protocol["execution_ready"] is not False:
-        errors.append("proposal must stay non-executable until readiness is actually verified")
+        errors.append("execution_ready must remain false until the real-data gates are verified")
     if any(not 0 < p <= 1 for p in analysis["mask_sensitivity"]["probabilities"]):
         errors.append("invalid masking probability")
     if analysis["mask_sensitivity"]["selection_split"] != "validation_only":
@@ -98,7 +98,7 @@ def main() -> int:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
     print("Configuration structure and consistency: PASS")
-    print("Training readiness: NOT READY (data rights, audit gates, lexicon and trainer remain unresolved).")
+    print("Real-data readiness: NOT READY (rights, review, lexicon, target environment and some baselines remain unresolved).")
     return 0
 
 

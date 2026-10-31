@@ -1,6 +1,6 @@
 # 3. 基线、消融与实验矩阵
 
-下面的计划全都处于“未执行”状态。模型候选、检查点及版本见 [`models.json`](../configs/models.json)；分层矩阵及A0—A8见 [`experiment_matrix.json`](../configs/experiment_matrix.json)。任何表述都不得假装已经训练、调参或得到结论。
+下面的计划均尚未正式执行；部分独立代码已通过合成样本测试，见[实现说明](09_training_implementation.md)。模型候选、检查点及版本见 [`models.json`](../configs/models.json)；分层矩阵及A0—A8见 [`experiment_matrix.json`](../configs/experiment_matrix.json)。任何表述都不得假装已有真实训练、调参或结论。
 
 ## 3.1 基线分层
 
@@ -10,7 +10,7 @@
 | 同骨干监督 | ESIM/BiLSTM + CE+SCL | L | 检查监督对比部分 |
 | 同骨干半监督 | 自训练 | 相同L与U | 伪标签路线 |
 | 同骨干半监督 | 一致性训练 | 相同L与U | 预测一致性路线 |
-| 拟实现方法 | 两阶段 pair-level 对比 | 相同L与U | 本项目方案，非官方实现 |
+| 本项目方法 | 两阶段 pair-level 对比 | 相同L与U | 独立实现，非官方实现 |
 | 预训练监督 | 中文 BERT-base | L + 公开预训练知识 | 常规预训练参照 |
 | 轻量预训练监督 | 中文小型 RoBERTa 候选 | L + 公开预训练知识 | 参数、资源及预测权衡 |
 | 可选补充 | 中文 RoBERTa-wwm-ext | L + 公开预训练知识 | 更强预训练监督参照 |
