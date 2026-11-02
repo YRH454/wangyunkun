@@ -244,7 +244,7 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
 def prepare(paths: list[Path], output: Path, seed: int = 20261030,
             threshold: int = 90, source_field: str | None = None,
             size_tolerance: float = 0.02, class_tolerance: float = 0.05,
-            candidate_limit: int = 5000000) -> dict[str, Any]:
+            candidate_limit: int = 5000000, review: dict[str, Any] | None = None) -> dict[str, Any]:
     if not paths or not 1 <= threshold <= 100 or not 0 <= size_tolerance < 1 or not 0 <= class_tolerance < 1 or candidate_limit < 1:
         raise PreparationError("invalid arguments")
     target = output.resolve()
@@ -254,8 +254,39 @@ def prepare(paths: list[Path], output: Path, seed: int = 20261030,
         raise PreparationError("an input is inside the output directory")
     labeled, unlabeled, input_stats = load_inputs(paths, source_field)
     conflicts = {pair: group for pair, group in labeled.items() if group.labels == {0, 1}}
+    resolved_conflicts: list[dict[str, Any]] = []
+    review = review or {}
+    resolutions: dict[str, int] = review.get("conflict_labels", {})
+    conflict_by_id = {sample_id(pair): pair for pair in conflicts}
+    if not set(resolutions).issubset(conflict_by_id) or any(type(x) is not int or x not in (0, 1) for x in resolutions.values()):
+        raise PreparationError("reviewed conflict resolution does not match original conflicts")
+    for identifier, label in resolutions.items():
+        pair = conflict_by_id[identifier]
+        group = conflicts.pop(pair)
+        for observation in group.observations:
+            resolved_conflicts.append({"sample_id": identifier, "sentence1": observation.sentence1,
+                                       "sentence2": observation.sentence2, "original_label": observation.label,
+                                       "reviewed_label": label, "input_index": observation.input_index,
+                                       "line_number": observation.line_number})
+        group.labels = {label}
     for pair in conflicts:
         del labeled[pair]
+    excluded_ids: set[str] = set(review.get("excluded_ids", set()))
+    available_ids = {sample_id(pair) for pair in labeled} | {sample_id(pair) for pair in unlabeled}
+    if not excluded_ids.issubset(available_ids):
+        raise PreparationError("review exclusion does not match an eligible original pair")
+    excluded_observations: list[dict[str, Any]] = []
+    excluded_labeled_count = 0
+    for group_map in (labeled, unlabeled):
+        for pair in list(group_map):
+            if sample_id(pair) not in excluded_ids:
+                continue
+            group = group_map.pop(pair)
+            for observation in group.observations:
+                excluded_observations.append({"sample_id": sample_id(pair), "sentence1": observation.sentence1,
+                                              "sentence2": observation.sentence2, "gold_label": observation.label,
+                                              "input_index": observation.input_index, "line_number": observation.line_number})
+                excluded_labeled_count += int(observation.label in (0, 1))
     if not labeled:
         raise PreparationError("no eligible labeled records")
 
@@ -265,6 +296,12 @@ def prepare(paths: list[Path], output: Path, seed: int = 20261030,
         graph.union(text_node(pair[0]), text_node(pair[1]))
         for source in group.sources:
             graph.union(text_node(pair[0]), "source:" + source)
+    reviewed_edges = review.get("edges", [])
+    for edge in reviewed_edges:
+        if not isinstance(edge, (tuple, list)) or len(edge) != 2 or not all(isinstance(x, str) and x for x in edge):
+            raise PreparationError("invalid reviewed sentence edge")
+        # Retain transitive constraints even if a linking sample is quarantined.
+        graph.union(text_node(edge[0]), text_node(edge[1]))
     texts = {text for pair in labeled for text in pair}
     index = LexicalIndex(texts, threshold, candidate_limit)
     lexical_edges = 0
@@ -281,6 +318,7 @@ def prepare(paths: list[Path], output: Path, seed: int = 20261030,
     eval_items = assigned["validation"] + assigned["test"]
     eval_texts = {text for group in eval_items for text in group.pair}
     eval_sources = {source for group in eval_items for source in group.sources}
+    eval_review_roots = {graph.find(text_node(text)) for text in eval_texts}
     removed: Counter[str] = Counter()
     kept_unlabeled: list[PairGroup] = []
     for pair, group in sorted(unlabeled.items()):
@@ -292,6 +330,8 @@ def prepare(paths: list[Path], output: Path, seed: int = 20261030,
             removed["exact_evaluation_sentence"] += 1
         elif group.sources & eval_sources:
             removed["evaluation_source"] += 1
+        elif reviewed_edges and any(graph.find(text_node(text)) in eval_review_roots for text in pair):
+            removed["review_group_with_evaluation"] += 1
         elif any(index.matching(text, eval_texts) for text in pair):
             removed["lexical_near_evaluation_sentence"] += 1
         else:
@@ -319,6 +359,13 @@ def prepare(paths: list[Path], output: Path, seed: int = 20261030,
                                   "input_index": observation.input_index, "line_number": observation.line_number})
     write_jsonl(output / "quarantined_conflicts.jsonl", conflict_rows)
     filenames = [f"{name}.jsonl" for name in SPLITS] + ["unlabeled.jsonl", "quarantined_conflicts.jsonl"]
+    if review:
+        write_jsonl(output / "reviewed_edges.jsonl", ({"sentence_a": a, "sentence_b": b} for a, b in reviewed_edges))
+        write_jsonl(output / "quarantined_human_review.jsonl", excluded_observations)
+        write_jsonl(output / "resolved_conflict_observations.jsonl", resolved_conflicts)
+        write_jsonl(output / "review_decisions.jsonl", review.get("decisions", []))
+        filenames.extend(["reviewed_edges.jsonl", "quarantined_human_review.jsonl",
+                          "resolved_conflict_observations.jsonl", "review_decisions.jsonl"])
     report: dict[str, Any] = {
         "schema_version": 1,
         "status": "COMPLETE_REQUIRES_INDEPENDENT_VERIFICATION",
@@ -342,7 +389,7 @@ def prepare(paths: list[Path], output: Path, seed: int = 20261030,
         "conflicting_observations_quarantined": sum(len(group.observations) for group in conflicts.values()),
         "duplicate_labeled_observations_excluding_conflicts": (
             sum(sum(item["label_counts"][str(i)] for i in (0, 1)) for item in input_stats)
-            - sum(len(group.observations) for group in conflicts.values()) - len(labeled)),
+            - sum(len(group.observations) for group in conflicts.values()) - excluded_labeled_count - len(labeled)),
         "connected_components": len(components),
         "largest_component_pairs": max(map(len, components.values())),
         "target_fractions": dict(zip(SPLITS, FRACTIONS)),
@@ -358,6 +405,13 @@ def prepare(paths: list[Path], output: Path, seed: int = 20261030,
                         "Source independence is unverified when source IDs are unavailable.",
                         "Generator training/pretraining exposure and data-use rights remain unverified.",
                         "Quarantined conflicts require human review; no label was inferred."]}
+    if review:
+        report["human_review"] = {**review.get("metadata", {}), "reviewed_group_edges": len(reviewed_edges),
+                                   "quarantined_pair_ids": len(excluded_ids),
+                                   "quarantined_observations": len(excluded_observations),
+                                   "resolved_conflict_pairs": len(resolutions),
+                                   "resolved_conflict_observations": len(resolved_conflicts),
+                                   "judgments_are_human_not_automatically_verified": True}
     with (output / "manifest.json").open("x", encoding="utf-8", newline="\n") as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2)
         handle.write("\n")

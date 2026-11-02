@@ -1,0 +1,9 @@
+# Install the appropriate PyTorch GPU wheel separately as documented in docs/05_windows_environment.md.
+# This is a proposed Python 3.10 server environment, not a verified installation.
+numpy==1.26.4
+scipy==1.14.1
+scikit-learn==1.5.2
+transformers==4.44.2
+safetensors==0.4.5
+matplotlib==3.9.2
+psutil==6.0.0

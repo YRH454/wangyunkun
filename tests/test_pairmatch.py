@@ -21,6 +21,8 @@ if importlib.util.find_spec("torch") is not None:
     import torch
     import create_ldp_subset
     import benchmark_pairmatch
+    import analyze_errors
+    import extract_embeddings
     import prepare_clean_split
     import verify_clean_split
     import predict_pairmatch
@@ -158,6 +160,11 @@ class PairMatchTests(unittest.TestCase):
         args.term_lexicon = None
         with self.assertRaises(DataError):
             train(args)
+        args.term_lexicon = self.lexicon
+        args.seed = 23
+        with self.assertRaises(DataError):
+            train(args)
+        args.seed = 11
         output.mkdir()
         marker = output / "marker"
         marker.write_text("keep", encoding="utf-8")
@@ -171,12 +178,18 @@ class PairMatchTests(unittest.TestCase):
                 args = self.arguments(self.root / f"condition_{condition}", condition)
                 args.stage1_steps = args.stage2_steps = 1
                 args.confidence = 0.5  # Synthetic test exercises acceptance, not the formal 0.95 setting.
+                if condition == "dropout_pretrain":
+                    args.dropout = 0.2
                 result = train(args)
                 self.assertEqual(result["status"], "COMPLETE")
                 self.assertEqual(len(result["stages"]), len(CONDITIONS[condition]))
                 self.assertEqual(result["total_executed_steps_including_rolled_back"], len(CONDITIONS[condition]))
                 self.assertTrue((args.run_dir / result["final_checkpoint"]).exists())
-                self.assertTrue(all(x["labeled_exposures"] == 4 for x in result["stages"]))
+                if condition == "dropout_pretrain":
+                    self.assertEqual([x["labeled_exposures"] for x in result["stages"]], [0, 4])
+                    self.assertIsNone(result["stages"][0]["best_validation_macro_f1"])
+                else:
+                    self.assertTrue(all(x["labeled_exposures"] == 4 for x in result["stages"]))
                 if any(u for _, u in CONDITIONS[condition]):
                     self.assertTrue(any(x["unlabeled_exposures"] == 4 for x in result["stages"]))
 
@@ -267,6 +280,24 @@ class PairMatchTests(unittest.TestCase):
         self.assertGreater(report["parameters_total_including_embeddings"], 0)
         with self.assertRaises(DataError):
             benchmark_pairmatch.benchmark(options)
+
+    def test_prediction_error_and_embedding_pipeline_on_synthetic_data(self) -> None:
+        args = self.arguments(self.root / "pipeline", "ce")
+        args.stage1_steps = 1
+        trained = train(args)
+        pred_args = type("Args", (), {"checkpoint": args.run_dir / trained["final_checkpoint"],
+                     "split_dir": self.split, "split": "test", "output_dir": self.root / "pipeline_predictions",
+                     "confirm_test_locked": True, "device": "cpu", "batch_size": 4, "cpu_threads": 1})()
+        predict_pairmatch.predict(pred_args)
+        errors = analyze_errors.analyze(pred_args.output_dir / "metrics.json", self.split,
+                                         self.root / "errors", True)
+        self.assertEqual(sum(row["pair_count"] for row in errors["bins"]),
+                         len(predict_pairmatch.checked_rows(self.split / "test.jsonl", errors["split_sha256"], True)))
+        embeddings_args = type("Args", (), {"checkpoint": pred_args.checkpoint, "split_dir": self.split,
+            "split": "test", "output_dir": self.root / "embeddings", "confirm_prespecified_analysis": True,
+            "max_samples": 10, "seed": 42, "batch_size": 4, "cpu_threads": 1, "device": "cpu"})()
+        result = extract_embeddings.extract(embeddings_args)
+        self.assertEqual(result["sample_count"], 10)
 
     def test_command_line_train_and_predict_on_synthetic_data(self) -> None:
         run_dir = self.root / "cli_run"

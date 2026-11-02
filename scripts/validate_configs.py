@@ -98,7 +98,7 @@ def main() -> int:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
     print("Configuration structure and consistency: PASS")
-    print("Real-data readiness: NOT READY (rights, review, lexicon, target environment and some baselines remain unresolved).")
+    print("Real-data readiness: NOT READY (rights, review, lexicon, pretrained weights and target environment remain unresolved).")
     return 0
 
 

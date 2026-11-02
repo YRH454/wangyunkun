@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "self_training_and_consistency_implemented_independently_other_baselines_proposed_only",
+  "status": "independent_baselines_implemented_synthetic_tests_only",
   "esim_self_training": {
     "teacher_source": "best_stage1_CE_checkpoint_frozen_for_one_pseudolabel_pass",
     "confidence_threshold": 0.95,

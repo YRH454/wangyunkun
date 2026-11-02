@@ -7,9 +7,10 @@
 - 基于本地文件结构的**数据配置**，以及实验、模型、硬件和消融的机器可读 JSON 配置。
 - 面向 Windows 和单 GPU 的**完整实验方案**，包括分组划分、数据泄漏检查、基线、统计、硬件测量和记录模板。
 - 独立编写的数据审计、分组防泄漏划分、标注比例采样工具；原始输入只读，生成的数据仅保存本地。
-- 独立实现的字符级 ESIM 风格训练器：监督对照、两阶段对比、A0—A8、自训练与一致性对照，以及本地预测、基础统计和 CPU 延迟测量。只经过合成数据功能测试。
+- 独立实现的字符级 ESIM 风格训练器：监督对照、两阶段对比、A0—A8、自训练、一致性、Mean Teacher 和 dropout 预训练对照。
+- 离线 BERT／中文 RoBERTa 监督基线、验证集网格调参、人工复核后重划分、配对统计、图表和效率测量代码。只经过合成数据功能测试；不自动下载模型。
 
-**当前没有原作者的训练代码、真实实验结果或已经验证的目标服务器运行记录。** 训练代码是根据本项目协议独立实现的，不保证与原论文完全一致。部分基线和统计仍未实现；`python scripts/validate_configs.py` 成功只说明配置结构一致，不表示实验可以开始或数据已经安全。
+**当前没有原作者的完整训练代码、真实实验结果或已经验证的目标服务器运行记录。** 训练代码是根据本项目协议独立实现的，不保证与原论文完全一致。现有预训练基线是离线加载并微调通用模型，并非原论文 SBERT、CoSENT、PairSup、BERT-ATT、R-Drop BERT 或 DeepSeek 的逐项复现；如需以这些确切名称比较，还须取得可核验实现或另行实现和测试。可靠覆盖所有算子的 FLOPs 及按长度分层的效率测量也尚未实现。`python scripts/validate_configs.py` 成功只说明配置结构一致，不表示实验可以开始或数据已经安全。
 
 ## 重要边界
 
@@ -59,6 +60,7 @@ $LASTEXITCODE
 7. [实验关注点与方案对照](docs/07_experiment_coverage.md)
 8. [防泄漏划分与标注比例采样：操作说明](docs/08_clean_split_workflow.md)
 9. [独立训练器：功能、边界和运行方法](docs/09_training_implementation.md)
+10. [服务器完整操作：人工复核、预训练基线、调参、统计与画图](docs/10_server_workflow.md)
 
 配置清单：[数据集](configs/datasets.json)、[训练协议](configs/protocol.json)、[模型候选](configs/models.json)、[基线参数](configs/baseline_protocols.json)、[实验矩阵](configs/experiment_matrix.json)、[分析配置](configs/analysis_plan.json)、[目标服务器](configs/target_server.json)。所有路径是相对于用户本地数据根目录的说明，不会从互联网自动下载或复制数据。
 

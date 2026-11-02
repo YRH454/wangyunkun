@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -25,6 +26,8 @@ from .objectives import supervised_contrastive, unsupervised_contrastive
 CONDITIONS = {
     "ce": [(False, False)], "ce_scl": [(True, False)],
     "self_train": [(False, False), (False, True)], "consistency": [(False, False), (False, True)],
+    "mean_teacher": [(False, False), (False, True)],
+    "dropout_pretrain": [(False, True), (False, False)],
     "A0": [(False, False), (False, False)], "A1": [(True, False), (False, False)],
     "A2": [(False, False), (False, True)], "A3": [(True, False), (False, True)],
     "A4": [(True, True)], "A5": [(True, False), (False, True)],
@@ -157,6 +160,40 @@ def loss_consistency(model: PairESIM, batch: list[dict], vocab: dict, args: Any,
     return F.cross_entropy(strong_logits, pseudo[selected]), counts
 
 
+def loss_mean_teacher(model: PairESIM, teacher: PairESIM, batch: list[dict], vocab: dict, args: Any,
+                      terms: list[str], rng: random.Random, device: torch.device) -> tuple[torch.Tensor | None, dict]:
+    original, augmented = [], []
+    counts = {"presented": len(batch), "unchanged": 0, "positions": 0, "total_positions": 0,
+              "masked_types": 0, "eligible_types": 0}
+    for row in batch:
+        a, b, info = mask_view(row, terms, args.mask_rate, rng, args.max_length)
+        for key in ("positions", "total_positions", "masked_types", "eligible_types"):
+            counts[key] += info[key]
+        if not info["positions"]:
+            counts["unchanged"] += 1
+            continue
+        original.append((encode(row["sentence1"], vocab, args.max_length), encode(row["sentence2"], vocab, args.max_length)))
+        augmented.append(([vocab.get(x, 1) for x in a], [vocab.get(x, 1) for x in b]))
+    counts["valid_views"] = len(original)
+    counts["skipped_batch"] = int(not original)
+    if not original:
+        return None, counts
+    teacher.eval()
+    with torch.no_grad():
+        weak, _ = teacher(*batch_encode(original, device))
+        target = weak.softmax(-1)
+    strong, _ = model(*batch_encode(augmented, device))
+    return F.mse_loss(strong.softmax(-1), target), counts
+
+
+def update_teacher(teacher: PairESIM, student: PairESIM, decay: float) -> None:
+    with torch.no_grad():
+        for old, new in zip(teacher.parameters(), student.parameters()):
+            old.mul_(decay).add_(new, alpha=1 - decay)
+        for old, new in zip(teacher.buffers(), student.buffers()):
+            old.copy_(new)
+
+
 def pseudo_labels(model: PairESIM, data: list[dict], vocab: dict, args: Any,
                   device: torch.device) -> tuple[list[dict], dict]:
     """One frozen-model pass; no gold U labels are present or accessed."""
@@ -196,6 +233,8 @@ def train(args: Any) -> dict:
         raise DataError("confirm data rights and completed/documented review before training")
     if args.condition not in CONDITIONS:
         raise DataError("unknown condition")
+    from .tuning import apply_lock
+    tuning_lock = apply_lock(args, args.condition)
     if args.run_dir.exists():
         raise DataError("run directory exists; refusing to overwrite")
     resolved_out = args.run_dir.resolve()
@@ -204,11 +243,12 @@ def train(args: Any) -> dict:
     if args.term_lexicon and args.term_lexicon.resolve().is_relative_to(resolved_out):
         raise DataError("term lexicon is inside the output directory")
     finite = (args.learning_rate, args.weight_decay, args.dropout, args.temperature, args.mask_rate,
-              args.scl_weight, args.ul_weight, args.min_delta, args.u_fraction, args.confidence)
+              args.scl_weight, args.ul_weight, args.min_delta, args.u_fraction, args.confidence, args.teacher_ema)
     if not all(math.isfinite(x) for x in finite):
         raise DataError("numeric settings must be finite")
     if (args.learning_rate <= 0 or args.weight_decay < 0 or not 0 <= args.dropout < 1 or args.temperature <= 0
-            or not 0 <= args.mask_rate <= 1 or not 0.5 <= args.confidence <= 1 or min(args.scl_weight, args.ul_weight, args.min_delta) < 0
+            or not 0 <= args.mask_rate <= 1 or not 0.5 <= args.confidence <= 1 or not 0 <= args.teacher_ema < 1
+            or min(args.scl_weight, args.ul_weight, args.min_delta) < 0
             or min(args.max_length, args.embedding_dim, args.hidden, args.batch_size, args.u_batch_size,
                    args.accumulation, args.eval_every, args.patience, args.stage1_steps, args.stage2_steps,
                    args.cpu_threads) < 1):
@@ -218,9 +258,11 @@ def train(args: Any) -> dict:
     if args.u_fraction not in (0.25, 0.5, 1.0):
         raise DataError("U fraction must be 0.25, 0.5 or 1")
     uses_u = any(u for _, u in CONDITIONS[args.condition])
-    if uses_u and args.condition not in ("self_train", "consistency") and args.u_batch_size < 2:
+    if uses_u and args.condition not in ("self_train", "consistency", "mean_teacher") and args.u_batch_size < 2:
         raise DataError("U microbatch must contain at least two pairs")
-    needs_terms = uses_u and args.condition != "self_train"
+    needs_terms = uses_u and args.condition not in ("self_train", "dropout_pretrain")
+    if args.condition == "dropout_pretrain" and args.dropout <= 0:
+        raise DataError("dropout pretraining requires nonzero dropout")
     if needs_terms and args.term_lexicon is None:
         raise DataError("a real term lexicon is required for U-loss conditions")
     term_hash = digest(args.term_lexicon) if needs_terms else None
@@ -229,6 +271,8 @@ def train(args: Any) -> dict:
         raise DataError("term lexicon changed while reading")
     labeled, validation, unlabeled, provenance = load_training_data(
         args.split_dir, args.subset_dir, args.verification_report, uses_u and args.condition != "A5")
+    if provenance["sampling_seed"] != args.seed:
+        raise DataError("training seed must match the LDP sampling seed")
     if uses_u and args.condition == "A5":
         unlabeled = [{key: value for key, value in row.items() if key != "gold_label"} for row in labeled]
     if uses_u and args.condition == "A7":
@@ -255,8 +299,10 @@ def train(args: Any) -> dict:
               "mask_rate": args.mask_rate, "u_fraction": args.u_fraction, "cpu_threads": args.cpu_threads,
               "term_lexicon_sha256": term_hash,
               "pseudo_label_confidence": args.confidence,
+              "teacher_ema": args.teacher_ema,
               "vocabulary_fitted_on": "selected_labeled_training_text_only",
-              "stages_scl_ul": CONDITIONS[args.condition], "threshold": 0.5}
+              "stages_scl_ul": CONDITIONS[args.condition], "threshold": 0.5,
+              "tuning_lock": tuning_lock}
     args.run_dir.mkdir(parents=True, exist_ok=False)
     dump(args.run_dir / "config.json", config)
     root = Path(__file__).resolve().parent.parent
@@ -289,6 +335,10 @@ def train(args: Any) -> dict:
         for stage_index, (use_scl, use_ul) in enumerate(CONDITIONS[args.condition], 1):
             limit = args.stage1_steps if stage_index == 1 else args.stage2_steps
             optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+            teacher = copy.deepcopy(model).eval() if args.condition == "mean_teacher" and stage_index == 2 else None
+            if teacher is not None:
+                for parameter in teacher.parameters():
+                    parameter.requires_grad_(False)
             warmup = max(1, math.ceil(limit * 0.1))
             def scale(step: int) -> float:
                 if step < warmup:
@@ -305,6 +355,42 @@ def train(args: Any) -> dict:
                       "mask_total_positions": 0, "masked_types": 0, "eligible_types": 0,
                       "scl_valid_anchors": 0, "scl_zero_anchor_batches": 0, "pseudo_accepted_exposures": 0}
             best_path = args.run_dir / f"stage_{stage_index}_best.pt"
+            if args.condition == "dropout_pretrain" and stage_index == 1:
+                # The classifier is not supervised in stage 1. Use the predeclared
+                # final pretraining update, not validation labels, to choose it.
+                assert stream_u is not None
+                for step in range(1, limit + 1):
+                    model.train()
+                    optimizer.zero_grad(set_to_none=True)
+                    mean_ul = 0.0
+                    for _ in range(args.accumulation):
+                        batch = stream_u.next()
+                        inputs = batch_encode(pairs_for(batch, vocab, args.max_length), device)
+                        _, first = model(*inputs)
+                        _, second = model(*inputs)
+                        loss, valid = unsupervised_contrastive(first, second, [row["sample_id"] for row in batch], args.temperature)
+                        if not valid or not torch.isfinite(loss):
+                            raise DataError("invalid dropout contrastive microbatch")
+                        (loss / args.accumulation).backward()
+                        mean_ul += float(loss.detach().item()) / args.accumulation
+                        counts["unlabeled_exposures"] += len(batch)
+                        counts["u_valid_views"] += len(batch)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
+                    used_learning_rate = optimizer.param_groups[0]["lr"]
+                    optimizer.step()
+                    scheduler.step()
+                    total_steps += 1
+                    append(args.run_dir / "train_log.jsonl", {"stage": stage_index, "stage_step": step,
+                           "global_executed_step": total_steps, "learning_rate": used_learning_rate,
+                           "ce": 0.0, "scl": 0.0, "ul": mean_ul, "total": mean_ul})
+                torch.save({"format_version": 1, "model_state": model.state_dict(), "vocab": vocab,
+                            "config": config, "provenance": provenance, "stage": stage_index,
+                            "stage_step": limit, "global_executed_step": total_steps,
+                            "validation_macro_f1": None}, best_path)
+                stage_summaries.append({"stage": stage_index, "executed_steps": limit, "best_step": limit,
+                                        "best_validation_macro_f1": None,
+                                        "selection": "fixed_final_pretraining_step_without_validation_selection", **counts})
+                continue
             for step in range(1, limit + 1):
                 model.train()
                 optimizer.zero_grad(set_to_none=True)
@@ -334,6 +420,8 @@ def train(args: Any) -> dict:
                                     "masked_types": 0, "eligible_types": 0, "accepted": len(u_batch)}
                         elif args.condition == "consistency":
                             ul, info = loss_consistency(model, u_batch, vocab, args, terms, mask_rng, device)
+                        elif teacher is not None:
+                            ul, info = loss_mean_teacher(model, teacher, u_batch, vocab, args, terms, mask_rng, device)
                         else:
                             ul, info = loss_u(model, u_batch, vocab, args, terms, mask_rng, device)
                         counts["unlabeled_exposures"] += info["presented"]
@@ -357,6 +445,8 @@ def train(args: Any) -> dict:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
                 used_learning_rate = optimizer.param_groups[0]["lr"]
                 optimizer.step()
+                if teacher is not None:
+                    update_teacher(teacher, model, args.teacher_ema)
                 scheduler.step()
                 total_steps += 1
                 append(args.run_dir / "train_log.jsonl", {"stage": stage_index, "stage_step": step,

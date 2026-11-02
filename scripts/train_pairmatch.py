@@ -35,6 +35,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--dropout", type=float, default=0.5)
     p.add_argument("--learning-rate", type=float, default=0.0003)
     p.add_argument("--weight-decay", type=float, default=0.01)
+    p.add_argument("--tuning-lock", type=Path, help="Frozen validation-selected configuration")
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--u-batch-size", type=int, default=16)
     p.add_argument("--accumulation", type=int, default=2)
@@ -48,6 +49,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--scl-weight", type=float, default=0.5)
     p.add_argument("--ul-weight", type=float, default=0.5)
     p.add_argument("--confidence", type=float, default=0.95, help="Pseudo-label confidence for self-training/consistency")
+    p.add_argument("--teacher-ema", type=float, default=0.999, help="Mean-teacher EMA after each optimizer update")
     p.add_argument("--mask-rate", type=float, default=0.75)
     p.add_argument("--u-fraction", type=float, choices=(0.25, 0.5, 1.0), default=1.0)
     return p

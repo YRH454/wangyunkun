@@ -55,7 +55,7 @@ python -B scripts/review_near_candidates.py `
   --minimum-percent 80 --max-rows 5000
 ```
 
-`review_candidates.jsonl` 含原句和本地样本ID，`summary.json` 给出总候选数和保存数。候选按确定性顺序截断而非随机抽样；如果 `truncated=true`，不可把保存的部分当作全部或无偏样本。请结合对应文本对和来源由熟悉领域的人判断，保留复核依据；确认为泄漏的候选应在查看模型测试结果之前重新制定并执行分组／剔除规则，生成新版本并再次复核。该脚本本身不会把人工决定应用到划分中，也无法证明所有语义近重复已被发现。
+`review_candidates.jsonl` 含原句和本地样本ID，`summary.json` 给出总候选数和保存数。候选按确定性顺序截断而非随机抽样；如果 `truncated=true`，不可把保存的部分当作全部或无偏样本。请结合对应文本对和来源由熟悉领域的人判断，保留复核依据；确认为泄漏的候选应在查看模型测试结果之前重新制定并执行分组／剔除规则，生成新版本并再次复核。`review_near_candidates.py` 本身不改数据；新增的 `apply_review_decisions.py` 可以把完整人工决定应用到**全新**划分，具体见[服务器操作说明](10_server_workflow.md)。程序无法证明所有语义近重复已被发现。
 
 ## 8.4 九档标注比例与无标签模式
 

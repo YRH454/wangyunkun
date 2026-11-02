@@ -41,7 +41,7 @@ def benchmark(args: argparse.Namespace) -> dict:
     if summary.get("status") != "COMPLETE" or summary.get("final_checkpoint") != args.checkpoint.name:
         raise DataError("benchmark requires the final selected checkpoint of a completed run")
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    if checkpoint.get("format_version") != 1:
+    if checkpoint.get("format_version") not in (1, 2):
         raise DataError("unsupported checkpoint format")
     manifest_path = args.split_dir / "manifest.json"
     if digest(manifest_path) != checkpoint["provenance"]["split_manifest_sha256"]:
@@ -53,12 +53,28 @@ def benchmark(args: argparse.Namespace) -> dict:
     data = checked_rows(args.split_dir / "validation.jsonl", expected, True)[:args.sample_count]
     if not data:
         raise DataError("validation input is empty")
-    config, vocab = checkpoint["config"], checkpoint["vocab"]
+    config = checkpoint["config"]
     torch.set_num_threads(args.threads)
     device = torch.device("cpu")
-    model = make_model(config, len(vocab)).to(device).eval()
-    model.load_state_dict(checkpoint["model_state"])
-    cached = [batch_encode(pairs_for([row], vocab, config["max_length"]), device) for row in data]
+    if checkpoint["format_version"] == 1:
+        vocab = checkpoint["vocab"]
+        model = make_model(config, len(vocab)).to(device).eval()
+        model.load_state_dict(checkpoint["model_state"])
+        def encode_one(row):
+            return batch_encode(pairs_for([row], vocab, config["max_length"]), device)
+        def forward(inputs):
+            return model(*inputs)
+        truncation_info = truncation(data, config["max_length"])
+    else:
+        from pairmatch.transformer_runner import restore, tokenize, token_statistics
+        model, tokenizer = restore(checkpoint, args.checkpoint.parent / "tokenizer", device)
+        model.eval()
+        def encode_one(row):
+            return tokenize(tokenizer, [row], config["max_length"], device)
+        def forward(inputs):
+            return model(inputs)
+        truncation_info = token_statistics(tokenizer, data, config["max_length"])
+    cached = [encode_one(row) for row in data]
     times = {}
     with torch.inference_mode():
         for kind in ("model_only", "end_to_end_without_disk"):
@@ -66,24 +82,33 @@ def benchmark(args: argparse.Namespace) -> dict:
             for iteration in range(args.warmup + args.repeats):
                 index = iteration % len(data)
                 start = time.perf_counter_ns()
-                inputs = cached[index] if kind == "model_only" else batch_encode(
-                    pairs_for([data[index]], vocab, config["max_length"]), device)
-                model(*inputs)
+                inputs = cached[index] if kind == "model_only" else encode_one(data[index])
+                forward(inputs)
                 elapsed = (time.perf_counter_ns() - start) / 1_000_000
                 if iteration >= args.warmup:
                     durations.append(elapsed)
             times[kind] = distribution(durations)
+    try:
+        import psutil
+        memory = psutil.Process().memory_info()
+        process_memory = {"current_rss_bytes": memory.rss,
+                          "windows_peak_working_set_bytes": getattr(memory, "peak_wset", None),
+                          "psutil_version": psutil.__version__,
+                          "scope": "whole process since process start, including Python, dependencies and checkpoint loading"}
+    except ImportError:
+        process_memory = {"status": "unavailable_install_psutil"}
     result = {"status": "COMPLETE", "device": "cpu", "platform": platform.platform(),
               "processor": platform.processor(), "torch_version": str(torch.__version__), "threads": args.threads,
+              "interop_threads": torch.get_num_interop_threads(),
               "batch_size": 1, "warmup_per_measurement": args.warmup, "timed_repetitions_per_measurement": args.repeats,
               "input_selection": "first N validation pairs, cycled in fixed order; no disk reading in timing",
               "selected_pairs": len(data), "validation_sha256": expected,
-              "truncation": truncation(data, config["max_length"]), "checkpoint_sha256": digest(args.checkpoint),
+              "truncation": truncation_info, "checkpoint_sha256": digest(args.checkpoint),
               "checkpoint_file_size_bytes_including_metadata": args.checkpoint.stat().st_size,
               "benchmark_script_sha256": digest(Path(__file__)),
               "parameters_total_including_embeddings": sum(p.numel() for p in model.parameters()),
               "parameters_trainable": sum(p.numel() for p in model.parameters() if p.requires_grad),
-              "timings": times, "cpu_peak_process_memory": "not measured", "flops": "not measured",
+              "timings": times, "cpu_process_memory": process_memory, "flops": "not measured",
               "note": "Both timings end at model logits; no softmax/postprocessing or disk I/O. Model-only excludes encoding; end-to-end includes it."}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     dump(args.output, result)
@@ -102,6 +127,7 @@ def main() -> int:
     parser.add_argument("--threads", type=int, default=1)
     args = parser.parse_args()
     try:
+        torch.set_num_interop_threads(1)
         benchmark(args)
         print("CPU benchmark complete; measurement is local to the current host.")
         return 0

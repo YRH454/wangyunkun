@@ -20,7 +20,7 @@ py -3.10 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install torch==2.3.1 --index-url https://download.pytorch.org/whl/cu121
-python -m pip install numpy==1.26.4 scipy==1.14.1 scikit-learn==1.5.2 transformers==4.44.2 jieba==0.42.1
+python -m pip install -r requirements-server.txt
 python -B scripts/check_environment.py
 ```
 

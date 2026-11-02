@@ -13,6 +13,7 @@ from typing import Any
 
 from audit_jsonl import normalize_text, unordered
 from prepare_clean_split import LexicalIndex, PreparationError, SPLITS, file_digest, sample_id
+from component_diagnostic import UnionFind
 
 
 def verify(directory: Path, candidate_limit: int = 5000000) -> dict[str, Any]:
@@ -26,6 +27,10 @@ def verify(directory: Path, candidate_limit: int = 5000000) -> dict[str, Any]:
     if manifest.get("source_grouping") not in {"enabled", "not_available_not_verified"}:
         raise PreparationError("unknown source grouping status")
     filenames = [f"{name}.jsonl" for name in SPLITS] + ["unlabeled.jsonl", "quarantined_conflicts.jsonl"]
+    review_enabled = "human_review" in manifest
+    if review_enabled:
+        filenames.extend(["reviewed_edges.jsonl", "quarantined_human_review.jsonl",
+                          "resolved_conflict_observations.jsonl", "review_decisions.jsonl"])
     for name in filenames:
         if file_digest(directory / name) != manifest["output_sha256"][name]:
             raise PreparationError(f"file hash mismatch: {name}")
@@ -35,6 +40,7 @@ def verify(directory: Path, candidate_limit: int = 5000000) -> dict[str, Any]:
     labels: dict[str, Counter[int]] = {name: Counter() for name in SPLITS}
     counts: Counter[str] = Counter()
     seen_pairs: set[tuple[str, str]] = set()
+    labels_by_id: dict[str, int] = {}
     for name in texts:
         with (directory / f"{name}.jsonl").open(encoding="utf-8") as handle:
             for line in handle:
@@ -60,6 +66,7 @@ def verify(directory: Path, candidate_limit: int = 5000000) -> dict[str, Any]:
                     if type(label) is not int or label not in (0, 1):
                         raise PreparationError(f"invalid label in {name}")
                     labels[name][label] += 1
+                    labels_by_id[row["sample_id"]] = label
                 ids = row.get("source_ids", [])
                 if not isinstance(ids, list) or any(not isinstance(item, str) or not item for item in ids):
                     raise PreparationError(f"invalid source IDs in {name}")
@@ -80,6 +87,39 @@ def verify(directory: Path, candidate_limit: int = 5000000) -> dict[str, Any]:
             raise PreparationError(f"exact sentence overlap: {left}/{right}")
         if manifest["source_grouping"] == "enabled" and sources[left] & sources[right]:
             raise PreparationError(f"source overlap: {left}/{right}")
+    if review_enabled:
+        graph = UnionFind()
+        with (directory / "reviewed_edges.jsonl").open(encoding="utf-8") as handle:
+            edge_rows = [json.loads(line) for line in handle if line.strip()]
+        if len(edge_rows) != manifest["human_review"]["reviewed_group_edges"]:
+            raise PreparationError("review edge count mismatch")
+        for edge in edge_rows:
+            if (not isinstance(edge, dict) or set(edge) != {"sentence_a", "sentence_b"}
+                    or not all(isinstance(edge[key], str) and edge[key] and normalize_text(edge[key]) == edge[key] for key in edge)):
+                raise PreparationError("invalid reviewed edge")
+            graph.union(edge["sentence_a"], edge["sentence_b"])
+        roots = {role: {graph.find(text) for text in values} for role, values in texts.items()}
+        for left, right in comparisons:
+            if roots[left] & roots[right]:
+                raise PreparationError(f"human-reviewed group overlaps: {left}/{right}")
+        with (directory / "quarantined_human_review.jsonl").open(encoding="utf-8") as handle:
+            excluded_ids = {json.loads(line)["sample_id"] for line in handle if line.strip()}
+        if len(excluded_ids) != manifest["human_review"]["quarantined_pair_ids"] or excluded_ids & {sample_id(pair) for pair in seen_pairs}:
+            raise PreparationError("human-quarantined pairs present or count mismatch")
+        with (directory / "resolved_conflict_observations.jsonl").open(encoding="utf-8") as handle:
+            resolved = [json.loads(line) for line in handle if line.strip()]
+        if len(resolved) != manifest["human_review"]["resolved_conflict_observations"]:
+            raise PreparationError("resolved conflict observation count mismatch")
+        resolved_ids: dict[str, int] = {}
+        for row in resolved:
+            identifier, label = row["sample_id"], row["reviewed_label"]
+            if type(label) is not int or label not in (0, 1) or (identifier in resolved_ids and resolved_ids[identifier] != label):
+                raise PreparationError("invalid reviewed conflict label")
+            if identifier not in excluded_ids and labels_by_id.get(identifier) != label:
+                raise PreparationError("resolved conflict label does not match the new split")
+            resolved_ids[identifier] = label
+        if len(resolved_ids) != manifest["human_review"]["resolved_conflict_pairs"]:
+            raise PreparationError("resolved conflict pair count mismatch")
 
     all_texts = set().union(*texts.values())
     index = LexicalIndex(all_texts, threshold, candidate_limit)
@@ -109,6 +149,7 @@ def verify(directory: Path, candidate_limit: int = 5000000) -> dict[str, Any]:
         "lexical_threshold_percent": threshold,
         "lexical_candidate_comparisons": index.comparisons,
         "source_check": "passed_for_supplied_source_ids" if manifest["source_grouping"] == "enabled" else "not_available_not_verified",
+        "human_review_groups_check": "passed_for_recorded_edges_and_exclusions" if review_enabled else "not_applied",
         "limitations": ["This lexical rule does not rule out all semantic near duplicates.",
                         "Generator exposure and data-use rights are not established."],
     }

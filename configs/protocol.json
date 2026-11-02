@@ -92,5 +92,5 @@
     "do_not_adapt_seed_count_to_significance": true
   },
   "execution_ready": false,
-  "execution_blockers": ["data_rights_unconfirmed", "split_and_leakage_gates_unresolved", "term_lexicon_unknown_for_masking_conditions", "target_environment_not_validated", "some_baselines_not_implemented"]
+  "execution_blockers": ["data_rights_unconfirmed", "split_and_leakage_gates_unresolved", "term_lexicon_unknown_for_masking_conditions", "target_environment_not_validated", "model_rights_and_pinned_weights_not_verified"]
 }

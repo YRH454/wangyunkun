@@ -27,7 +27,7 @@ def predict(args: argparse.Namespace) -> dict:
     if args.device == "cuda" and not torch.cuda.is_available():
         raise DataError("CUDA was requested but is unavailable")
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    if checkpoint.get("format_version") != 1:
+    if checkpoint.get("format_version") not in (1, 2):
         raise DataError("unsupported checkpoint format")
     if args.split == "test":
         summary = read_json(args.checkpoint.parent / "summary.json")
@@ -45,29 +45,38 @@ def predict(args: argparse.Namespace) -> dict:
     data = checked_rows(args.split_dir / filename, expected, True)
     if not data:
         raise DataError("evaluation split is empty")
-    config, vocab = checkpoint["config"], checkpoint["vocab"]
-    if vocab.get("<pad>") != 0 or vocab.get("<unk>") != 1 or vocab.get("<mask>") != 2:
-        raise DataError("invalid checkpoint vocabulary")
+    config = checkpoint["config"]
     if args.batch_size < 1 or args.cpu_threads < 1:
         raise DataError("batch size and CPU threads must be positive")
     torch.set_num_threads(args.cpu_threads)
     device = torch.device(args.device)
-    model = make_model(config, len(vocab)).to(device)
-    model.load_state_dict(checkpoint["model_state"])
-    metrics, probabilities = validation_result(model, data, vocab, config["max_length"], args.batch_size, device)
+    if checkpoint["format_version"] == 1:
+        vocab = checkpoint["vocab"]
+        if vocab.get("<pad>") != 0 or vocab.get("<unk>") != 1 or vocab.get("<mask>") != 2:
+            raise DataError("invalid checkpoint vocabulary")
+        model = make_model(config, len(vocab)).to(device)
+        model.load_state_dict(checkpoint["model_state"])
+        metrics, probabilities = validation_result(model, data, vocab, config["max_length"], args.batch_size, device)
+        truncation_info = truncation(data, config["max_length"])
+    else:
+        from pairmatch.transformer_runner import evaluate, restore, token_statistics
+        model, tokenizer = restore(checkpoint, args.checkpoint.parent / "tokenizer", device)
+        metrics, probabilities = evaluate(model, tokenizer, data, config["max_length"], args.batch_size, device)
+        truncation_info = token_statistics(tokenizer, data, config["max_length"])
     args.output_dir.mkdir(parents=True, exist_ok=False)
     result = {"status": "COMPLETE", "split": args.split, "split_sha256": expected,
               "checkpoint_sha256": digest(args.checkpoint), "training_config": config,
               "training_provenance": checkpoint["provenance"], "checkpoint_stage": checkpoint["stage"],
               "checkpoint_step": checkpoint["stage_step"], "count": len(data), "metrics": metrics,
-              "truncation": truncation(data, config["max_length"]),
+              "truncation": truncation_info,
               "test_lock_is_user_attestation_not_automatically_proven": args.split == "test"}
-    dump(args.output_dir / "metrics.json", result)
     with (args.output_dir / "predictions.jsonl").open("x", encoding="utf-8", newline="\n") as handle:
         for row, probability in zip(data, probabilities):
             handle.write(json.dumps({"sample_id": row["sample_id"], "gold_label": row["gold_label"],
                                      "probability_positive": probability, "prediction": int(probability >= 0.5)},
                                     ensure_ascii=False, allow_nan=False) + "\n")
+    result["predictions_sha256"] = digest(args.output_dir / "predictions.jsonl")
+    dump(args.output_dir / "metrics.json", result)
     return result
 
 

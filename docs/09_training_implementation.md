@@ -11,6 +11,10 @@
 | A0—A8 | `--condition A0` … `A8`，与[消融矩阵](03_experiment_matrix.md)对应；A7 用 `--u-fraction 0.25/0.5/1.0` |
 | 自训练 | `self_train`：第一阶段 CE；最优权重一次性推断 U，置信度默认至少 0.95 才接收；第二阶段 `CE(L) + 0.5×CE(伪标签)`，记录接收数量及类别。零接收时第二阶段只有 CE，须报告这一事实 |
 | 一致性 | `consistency`：第一阶段 CE；第二阶段用停止梯度的原文预测和相同术语保护掩蔽视图，置信度默认至少 0.95，强视图伪标签 CE 默认权重 0.5；是本项目 FixMatch-style 对照，不是官方实现 |
+| Mean Teacher | `mean_teacher`：第二阶段教师由阶段一最优模型复制，使用原文教师概率与掩蔽后学生概率的 MSE；每次优化器更新后 EMA，默认0.999 |
+| dropout 预训练 | `dropout_pretrain`：阶段一只用U的两个 dropout 视图、固定步数末的权重，不用验证标签挑选；阶段二用L监督训练。不是官方 SimCSE 实现 |
+| 预训练监督模型 | 独立的 `train_transformer.py` 支持离线 BERT、中文 RoBERTa 和轻量模型，使用同一L和验证集；其外部预训练信息须单列 |
+| BERT领域适配 | `adapt_bert_mlm.py` 固定步数仅用训练U做MLM，再用 `train_transformer.py --model bert_domain_adaptation` 在L上微调；每个采样种子单独适配 |
 | 预测与指标 | 保存本地逐样本概率、预测、真值；输出二类混淆矩阵、各类 P/R/F1、macro-F1、accuracy、balanced accuracy |
 | 同条件汇总 | 在检查数据划分、模型配置、实现哈希和种子后，计算各指标均值和样本标准差；明确列出缺少的预设种子 |
 | CPU 测量 | 验证集上 batch=1，分别计时模型本体和含字符编码的端到端推理；默认单线程、预热100次、计时1000次，记录中位数和p95。也记录参数量和checkpoint文件大小 |
@@ -21,7 +25,7 @@
 
 默认单阶段4000步上限，两阶段各2000步，微批L=16，累积2次；U方法另用U微批16。每200步验证、连续4次未显著改善时提前停止；最高验证macro-F1的checkpoint被保存，严格同分保留最早一步。早停计数的显著改善门槛为0.0001。可用 `--fixed-steps` 关闭早停以实施**事先登记**的匹配步数控制，但仍然按验证集选checkpoint；这不自动保证计算量或样本曝光完全匹配。实际步数、L/U曝光、mask位置、跳过次数、伪标签接收数、模型参数、训练时间及可用的GPU显存峰值保存在本地。
 
-**尚未实现：** BERT／轻量预训练模型及其下载和训练、Mean Teacher、领域继续预训练、自动6组调参调度、组级bootstrap及Wilcoxon/Holm检验、绘图／句长和误差分析、FLOPs及CPU峰值进程内存测量、将人工复核决定自动应用于新划分。这些不能因为有方案或配置就称为已完成。
+**尚未实现：** 自动下载或核验远程模型来源、可靠覆盖所有算子的 FLOPs 计算、自动识别语义泄漏或生成数据质量。实现与服务器上真实训练的操作见[服务器工作流](10_server_workflow.md)。
 
 ## 9.2 真实训练之前的门槛
 
@@ -55,7 +59,7 @@ python -B scripts/train_pairmatch.py `
   --term-lexicon $terms --confirm-data-rights --confirm-reviewed-data --device cuda
 ```
 
-`ce`、`ce_scl`、`A0`、`A1` 和 `self_train` 不需要术语词表；`A2`—`A8` 和 `consistency` 需要。`self_train` 和 `consistency` 均需实际U，但 `A5` 使用L自身的增强视图。训练完成目录包含 `config.json`、`provenance.json`、阶段最优权重、训练／验证日志和 `summary.json`；中途失败则保留 `failure.json`。配置、词表和逐样本产物可能敏感，只留本地。目录已存在时拒绝覆盖，包括失败目录；每次重试使用新目录。
+`ce`、`ce_scl`、`A0`、`A1`、`self_train`、`dropout_pretrain` 不需要术语词表；`A2`—`A8`、`consistency`、`mean_teacher` 需要。半监督方法需实际U，但 `A5` 使用L自身的增强视图。训练完成目录包含 `config.json`、`provenance.json`、阶段最优权重、训练／验证日志和 `summary.json`；中途失败则保留 `failure.json`。配置、词表和逐样本产物可能敏感，只留本地。目录已存在时拒绝覆盖，包括失败目录；每次重试使用新目录。
 
 在完成预先确定的调参、模型和分析计划后，才能对最终checkpoint运行测试；确认参数只是人为声明，不是程序替代研究纪律。输出目录同样必须是全新的：
 
@@ -79,4 +83,4 @@ python -B scripts/benchmark_pairmatch.py `
   --output 'runs\agri_a3_30_seed11_cpu_benchmark.json'
 ```
 
-程序按文件次序取前32条验证对并循环使用，不是具有代表性长度分层抽样；比较模型时必须使用相同输入、长度、线程和设备负载。模型本体不含编码，端到端含编码与构造张量；两者均在输出logit后结束，不含softmax／预测后处理或磁盘读取。当前不测CPU峰值进程内存或FLOPs。不同设备、驱动或软件的耗时不可混称为目标服务器实测。
+程序按文件次序取前32条验证对并循环使用，不是具有代表性长度分层抽样；比较模型时必须使用相同输入、长度、线程和设备负载。模型本体不含编码，端到端含编码与构造张量；两者均在输出logit后结束，不含softmax／预测后处理或磁盘读取。Windows 有 psutil 时记录从进程启动起的进程峰值工作集，包括Python、依赖和权重加载，不是纯模型占用；不计算FLOPs。不同设备、驱动或软件的耗时不可混称为目标服务器实测。
