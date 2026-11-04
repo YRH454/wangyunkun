@@ -30,8 +30,8 @@
     "methods": ["esim_mean_teacher", "pair_dropout_pretraining", "bert_domain_adaptation"]
   },
   "ablation_conditions": [
-    {"id": "A0", "stage1": "CE", "stage2": "CE", "unlabeled_pool": "none", "mask": "none"},
-    {"id": "A1", "stage1": "CE+SCL", "stage2": "CE", "unlabeled_pool": "none", "mask": "none"},
+    {"id": "A0", "stage1": "CE", "stage2": "none", "unlabeled_pool": "none", "mask": "none"},
+    {"id": "A1", "stage1": "CE+SCL", "stage2": "none", "unlabeled_pool": "none", "mask": "none"},
     {"id": "A2", "stage1": "CE", "stage2": "CE+UL", "unlabeled_pool": "training_U", "mask": "term_exclusion"},
     {"id": "A3", "stage1": "CE+SCL", "stage2": "CE+UL", "unlabeled_pool": "training_U", "mask": "term_exclusion"},
     {"id": "A4", "stage1": "CE+SCL+UL", "stage2": "none", "unlabeled_pool": "training_U", "mask": "term_exclusion"},

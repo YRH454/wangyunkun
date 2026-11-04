@@ -1,0 +1,4 @@
+# Keep published data byte-identical across Windows, macOS, and Linux checkouts.
+data/agriculture_sentence_clean_v3/test.jsonl -text
+data/agriculture_sentence_clean_v3/agricultural_terms.txt -text
+data/agriculture_sentence_clean_v3/manifest.json -text

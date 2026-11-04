@@ -23,8 +23,6 @@ def apply_lock(args, method: str) -> dict | None:
         raise DataError("tuning lock belongs to a different parent split")
     with (args.subset_dir / "manifest.json").open(encoding="utf-8") as handle:
         subset = json.load(handle)
-    if subset.get("sampling_seed") != args.seed:
-        raise DataError("training seed must match the LDP sampling seed when applying a tuning lock")
     if subset.get("unlabeled_mode") != lock["unlabeled_mode"] or subset.get("unlabeled_cap") != lock["unlabeled_cap"]:
         raise DataError("U source or cap differs from the tuning reference")
     for key, expected in lock["fixed_arguments"].items():

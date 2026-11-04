@@ -9,6 +9,8 @@ import math
 import sys
 from pathlib import Path
 
+from scipy.stats import binomtest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pairmatch.analysis import load_result  # noqa: E402
 from pairmatch.data import DataError, checked_rows, digest, read_json  # noqa: E402
@@ -16,18 +18,18 @@ from pairmatch.metrics import calculate  # noqa: E402
 from pairmatch.runner import dump  # noqa: E402
 
 
-BOUNDARIES = (0, 5, 10, 15, 20, 25, float("inf"))
+BOUNDARIES = (0, 21, 31, 41, 51, float("inf"))
 
 
-def wilson(successes: int, total: int) -> list[float] | None:
+def length_group(length: int) -> int:
+    return next(i for i in range(len(BOUNDARIES) - 1) if BOUNDARIES[i] <= length < BOUNDARIES[i + 1])
+
+
+def exact_binomial_interval(successes: int, total: int) -> list[float] | None:
     if not total:
         return None
-    z = 1.959963984540054
-    proportion = successes / total
-    denominator = 1 + z * z / total
-    center = (proportion + z * z / (2 * total)) / denominator
-    margin = z * math.sqrt(proportion * (1 - proportion) / total + z * z / (4 * total * total)) / denominator
-    return [max(0.0, center - margin), min(1.0, center + margin)]
+    interval = binomtest(successes, total).proportion_ci(confidence_level=0.95, method="exact")
+    return [interval.low, interval.high]
 
 
 def analyze(metrics_path: Path, split_dir: Path, output: Path, confirm: bool) -> dict:
@@ -56,13 +58,13 @@ def analyze(metrics_path: Path, split_dir: Path, output: Path, confirm: bool) ->
         row, prediction = by_id[identifier], item["predictions"][identifier]
         if row["gold_label"] != prediction["gold_label"]:
             raise DataError("evaluation label differs from prediction record")
-        length = (len(row["sentence1"]) + len(row["sentence2"])) / 2
-        group = next(i for i in range(len(bins)) if BOUNDARIES[i] <= length < BOUNDARIES[i + 1])
+        length = len(row["sentence1"]) + len(row["sentence2"])
+        group = length_group(length)
         bins[group].append(prediction)
         if prediction["gold_label"] != prediction["prediction"]:
             errors.append({"sample_id": identifier, "gold_label": prediction["gold_label"],
                            "prediction": prediction["prediction"], "probability_positive": prediction["probability_positive"],
-                           "mean_original_character_length": length,
+                           "sum_original_character_length": length,
                            "error_type": "false_positive" if prediction["prediction"] == 1 else "false_negative"})
     summaries = []
     for index, group in enumerate(bins):
@@ -73,17 +75,18 @@ def analyze(metrics_path: Path, split_dir: Path, output: Path, confirm: bool) ->
                           "right_exclusive": BOUNDARIES[index + 1] if math.isfinite(BOUNDARIES[index + 1]) else None,
                           "pair_count": len(group), "positive_count": positives, "true_positives": tp,
                           "positive_recall": tp / positives if positives else None,
-                          "positive_recall_wilson_95_iid_assumption": wilson(tp, positives), "metrics": metrics})
+                          "positive_recall_exact_95_iid_assumption": exact_binomial_interval(tp, positives),
+                          "metrics": metrics})
     output.mkdir(parents=True, exist_ok=False)
     with (output / "errors.jsonl").open("x", encoding="utf-8", newline="\n") as handle:
         for row in errors:
             handle.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
     report = {"status": "COMPLETE", "metrics_sha256": item["metrics_sha256"],
               "predictions_sha256": item["predictions_sha256"], "split_sha256": result["split_sha256"],
-              "length_unit": "mean Unicode characters in the two original untruncated texts",
+              "length_unit": "sum of Unicode characters in the two original untruncated texts",
               "intervals": "left closed, right open", "bins": summaries, "error_count": len(errors),
               "errors_sha256": digest(output / "errors.jsonl"), "prespecified_user_attestation": True,
-              "limitation": "Wilson intervals assume independent positive pairs; shared sources/sentences may require group bootstrap."
+              "limitation": "Exact binomial intervals assume independent positive pairs; shared sources/sentences may require group bootstrap."
               " Human categorization requires authorized local review and is not inferred automatically."}
     dump(output / "length_summary.json", report)
     return report

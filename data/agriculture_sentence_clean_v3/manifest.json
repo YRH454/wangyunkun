@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "status": "COMPLETE_REQUIRES_INDEPENDENT_VERIFICATION",
+  "policy": "new_recombined_split_not_an_official_or_historical_test",
+  "seed": 20261030,
+  "python_version": "3.14.3",
+  "implementation_sha256": {
+    "prepare_clean_split.py": "bf52c051e94583094118b8aa377223a4baf3be5503d0eb763a546670c266e0ed",
+    "audit_jsonl.py": "56aecd8d9f56db475ad9dfc1d15a0d9ea1194cda22c76b33f355e83c97bd7fa9",
+    "component_diagnostic.py": "60d900e35a4072c4cf1f5cc99426de3b18ccbb53c289497bfc0ab8a5f249b525"
+  },
+  "normalization": "NFKC_remove_unicode_whitespace_preserve_case",
+  "pair_policy": "unordered_pair_assumes_symmetric_matching",
+  "lexical_rule": {
+    "features": "distinct_unicode_character_bigrams",
+    "similarity": "set_jaccard",
+    "threshold_percent": 90,
+    "labeled_sentence_edges": 295,
+    "candidate_comparisons": 19637,
+    "candidate_limit": 5000000
+  },
+  "source_grouping": "not_available_not_verified",
+  "source_field": null,
+  "inputs": [
+    {
+      "basename": "train_50.txt",
+      "sha256": "ad667180a0a617d5cbffeba08e9f6fddadc8eb5105da6d23b30fa4ba2249d2de",
+      "label_counts": {
+        "-1": 15000,
+        "0": 6307,
+        "1": 8693
+      }
+    },
+    {
+      "basename": "dev.txt",
+      "sha256": "7874ad740a05ab595d4c4b0c135245355e7d6f9badd3f77aba041d9da12dc709",
+      "label_counts": {
+        "-1": 0,
+        "0": 416,
+        "1": 584
+      }
+    },
+    {
+      "basename": "test.txt",
+      "sha256": "39f64a111af134bdf895c9d75fa3f9c2274579cc8e7242851089c60f1f7367c1",
+      "label_counts": {
+        "-1": 0,
+        "0": 421,
+        "1": 579
+      }
+    }
+  ],
+  "labeled_rows": 17000,
+  "labeled_unique_pairs_after_quarantine": 16323,
+  "conflicting_pairs_quarantined": 1,
+  "conflicting_observations_quarantined": 2,
+  "duplicate_labeled_observations_excluding_conflicts": 675,
+  "connected_components": 14415,
+  "largest_component_pairs": 36,
+  "target_fractions": {
+    "train": 0.8,
+    "validation": 0.1,
+    "test": 0.1
+  },
+  "maximum_absolute_fraction_error": 0.02,
+  "maximum_positive_rate_difference": 0.05,
+  "splits": {
+    "train": {
+      "count": 13058,
+      "fraction": 0.799975494700729,
+      "label_counts": {
+        "0": 5493,
+        "1": 7565
+      }
+    },
+    "validation": {
+      "count": 1633,
+      "fraction": 0.1000428842737242,
+      "label_counts": {
+        "0": 687,
+        "1": 946
+      }
+    },
+    "test": {
+      "count": 1632,
+      "fraction": 0.09998162102554678,
+      "label_counts": {
+        "0": 686,
+        "1": 946
+      }
+    }
+  },
+  "unlabeled_input_rows": 15000,
+  "unlabeled_input_unique_pairs": 14998,
+  "unlabeled_excluded_unique_pairs_by_first_reason": {
+    "exact_evaluation_sentence": 501,
+    "lexical_near_evaluation_sentence": 16,
+    "duplicates_any_labeled_pair": 19
+  },
+  "unlabeled_kept": 14462,
+  "output_sha256": {
+    "train.jsonl": "e6113823517b64e8516fabf33b4c0461adb5d874b7689a4514fbe317aa443af4",
+    "validation.jsonl": "aaff15c0726100177c48aabecc5011163f987cd0182faec53b3ade1fe1d8fe87",
+    "test.jsonl": "3b50b0f63448f564e9d6783838a836a4ad51050a0357cb88cf13149bdf5ed672",
+    "unlabeled.jsonl": "56ee8d3ad13a2f0464ebd40d4dcccaa773de7f424461593e9003c93cb8f54872",
+    "quarantined_conflicts.jsonl": "ca07350dc6996d6b0368ae3305a7047b319e0b5cd9983227cfd81f5c443755b6"
+  },
+  "limitations": [
+    "Exact and chosen lexical similarity checks do not prove semantic independence.",
+    "Source independence is unverified when source IDs are unavailable.",
+    "Generator training/pretraining exposure and data-use rights remain unverified.",
+    "Quarantined conflicts require human review; no label was inferred."
+  ]
+}

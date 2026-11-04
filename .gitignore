@@ -37,3 +37,12 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Publish the test split, its split metadata, and the model's term-protection list.
+!/data/
+/data/*
+!/data/agriculture_sentence_clean_v3/
+/data/agriculture_sentence_clean_v3/*
+!/data/agriculture_sentence_clean_v3/manifest.json
+!/data/agriculture_sentence_clean_v3/test.jsonl
+!/data/agriculture_sentence_clean_v3/agricultural_terms.txt

@@ -68,8 +68,10 @@ def validate() -> list[str]:
     if not samples["unlabeled_no_original_labels_visible"]:
         errors.append("unlabeled labels must be hidden before model access")
     train = protocol["training"]
-    if sum(train["two_stage_step_caps"]) > train["max_optimizer_steps"]:
-        errors.append("phase caps exceed total maximum")
+    if sum(train["two_stage_epoch_caps"]) != train["max_epochs"]:
+        errors.append("phase epoch caps differ from total epoch budget")
+    if train["validation_interval_epochs"] != 1:
+        errors.append("validation must be performed every epoch")
     if train["bilstm_micro_batch"] * train["bilstm_accumulation_steps"] != train["effective_optimizer_batch_size"]:
         errors.append("BiLSTM effective batch inconsistent")
     if train["transformer_micro_batch"] * train["transformer_accumulation_steps"] != train["effective_optimizer_batch_size"]:
@@ -78,8 +80,17 @@ def validate() -> list[str]:
         errors.append("execution_ready must remain false until the real-data gates are verified")
     if any(not 0 < p <= 1 for p in analysis["mask_sensitivity"]["probabilities"]):
         errors.append("invalid masking probability")
-    if analysis["mask_sensitivity"]["selection_split"] != "validation_only":
-        errors.append("masking sensitivity must be selected on validation only")
+    if analysis["mask_sensitivity"]["main_setting_selection_split"] != "validation":
+        errors.append("main masking setting must use validation selection")
+    if analysis["mask_sensitivity"]["sensitivity_evaluation_split"] != "test":
+        errors.append("paper's masking sensitivity is a test-set sweep")
+    terms_path = ROOT / protocol["reference_hyperparameters"]["term_lexicon"]
+    if not terms_path.is_file():
+        errors.append("agricultural term lexicon not found")
+    else:
+        terms = [line.strip() for line in terms_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if len(terms) != protocol["reference_hyperparameters"]["term_lexicon_entry_count"] or len(terms) != len(set(terms)):
+            errors.append("agricultural term lexicon entry count or uniqueness is inconsistent")
     if analysis["tsne"]["perplexity"] >= analysis["tsne"]["sample_max"]:
         errors.append("t-SNE perplexity must be less than the sample maximum")
     if target["evidence"] != "user_reported_not_verified_on_this_execution_host":
@@ -98,7 +109,7 @@ def main() -> int:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
     print("Configuration structure and consistency: PASS")
-    print("Real-data readiness: NOT READY (rights, review, lexicon, pretrained weights and target environment remain unresolved).")
+    print("Execution uses independently implemented code and requires appropriately authorized inputs.")
     return 0
 
 

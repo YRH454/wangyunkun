@@ -35,11 +35,14 @@ def summarize(paths: list[Path]) -> dict:
             raise ValueError("training implementation differs")
         if prov["labeled_percent"] != base_prov["labeled_percent"] or prov["unlabeled_mode"] != base_prov["unlabeled_mode"]:
             raise ValueError("LDP or U source differs")
+        for field in ("sampling_seed", "ldp_manifest_sha256", "labeled_sha256", "unlabeled_sha256_expected"):
+            if prov[field] != base_prov[field]:
+                raise ValueError("labeled subset or unlabeled data differs across runs")
         if {k: v for k, v in config.items() if k != "seed"} != base_config:
             raise ValueError("training configurations differ beyond seed")
         seed = config["seed"]
-        if seed in seeds or prov["sampling_seed"] != seed:
-            raise ValueError("duplicate seed or sampling/training seeds do not match")
+        if seed in seeds:
+            raise ValueError("duplicate training seed")
         seeds.add(seed)
         m = result["metrics"]
         metrics["accuracy"].append(m["accuracy"])

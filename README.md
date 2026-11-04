@@ -1,71 +1,128 @@
-# 农业文本匹配：公平、可复现的训练方案
+# Semi-TM：农业文本对匹配
 
-这是一个**独立学习和实验设计项目**。它借鉴文本对匹配的两阶段训练思路以及对实验严谨性的审查关注，目标是为自己的训练建立透明的数据处理、对照与记录规范；它不是原作者的官方仓库，也不是对原论文结果已经完成的复现。
+本仓库提供按照论文方法整理的 Semi-TM 实现和农业文本对测试集。任务是判断两个中文句子是否表达相同的问题。模型以字符为输入，使用 ESIM 风格的双向 LSTM 交互编码器，并通过两阶段训练利用有标注和无标注句对。
 
-目前仓库包含：
+论文：Yunkun Wang、Yunsheng Song、Xinyue Zhao、Ruihui Yao，*Agricultural Text-Pair Matching with Limited Labels: A Lightweight Two-Stage Semi-Supervised Model*。
 
-- 基于本地文件结构的**数据配置**，以及实验、模型、硬件和消融的机器可读 JSON 配置。
-- 面向 Windows 和单 GPU 的**完整实验方案**，包括分组划分、数据泄漏检查、基线、统计、硬件测量和记录模板。
-- 独立编写的数据审计、分组防泄漏划分、标注比例采样工具；原始输入只读，生成的数据仅保存本地。
-- 独立实现的字符级 ESIM 风格训练器：监督对照、两阶段对比、A0—A8、自训练、一致性、Mean Teacher 和 dropout 预训练对照。
-- 离线 BERT／中文 RoBERTa 监督基线、验证集网格调参、人工复核后重划分、配对统计、图表和效率测量代码。只经过合成数据功能测试；不自动下载模型。
+本仓库代码是依据现有论文与材料整理的独立实现；仓库代码本身不是对历史训练运行记录的证明。
 
-**当前没有原作者的完整训练代码、真实实验结果或已经验证的目标服务器运行记录。** 训练代码是根据本项目协议独立实现的，不保证与原论文完全一致。现有预训练基线是离线加载并微调通用模型，并非原论文 SBERT、CoSENT、PairSup、BERT-ATT、R-Drop BERT 或 DeepSeek 的逐项复现；如需以这些确切名称比较，还须取得可核验实现或另行实现和测试。可靠覆盖所有算子的 FLOPs 及按长度分层的效率测量也尚未实现。`python scripts/validate_configs.py` 成功只说明配置结构一致，不表示实验可以开始或数据已经安全。
+## 方法
 
-## 重要边界
+模型对句子逐字符编码，将两个句子的上下文表示进行交互、对齐和池化，再预测句对是否匹配。字符嵌入为 300 维，按 N(0, 0.1²) 初始化；使用无标注数据的配置以所选标注句对和所用无标注句对共同建立训练词表，不使用验证或测试文本建立词表。对比学习使用当前微批中的句对表示：
 
-1. 本仓库公开；不包含原论文、审稿意见原文、原作者代码、原始文本、原始样本、模型权重或本地审计报告。
-2. 本地数据文件、原始代码和各模型权重的**使用与再分发权限需要分别确认**。把数据放在本地不等于拥有公开分享或训练使用授权。
-3. 原论文的数据、训练细节与本地候选文件尚未一一确认。我们只把配置标为“本项目建议”，不把它们冒充为原作者的真实设置。
-4. 当前目录未声明仓库代码许可证；如需开放复用，请由仓库所有者另行决定。数据和预训练模型的许可与本仓库代码许可是两回事。
-5. `reports/`、`data/`、`datasets/`、权重和常见数据格式默认被 Git 忽略。忽略规则不是安全保证，每次提交前仍需人工检查。
+在本仓库对应的农业数据划分和 A3 配置中，10%、25%、30% 和 50% 标注比例的字符词表目标分别为 2,906、3,228、3,412 和 3,758。当前实现按训练文本中的字符出现频次从高到低选择；频次相同时按 Unicode 编码顺序选择，未选字符映射为 `<unk>`。这是一条为当前实现确定的筛选规则；字符数不包含另外保留的 `<pad>`、`<unk>` 和 `<mask>` 三个特殊标记。当训练文本中的不同字符少于对应目标时，程序会停止并给出提示，不会添加训练文本中未出现的字符。
 
-## 快速开始：先检查，再训练
+- 第一阶段使用有标注句对，目标为交叉熵损失与有监督对比损失。
+- 第二阶段继续使用有标注句对的交叉熵损失，同时对无标注句对及其掩蔽视图使用无监督对比损失。掩蔽针对两个句子共有的字符类型，并保护所提供农业术语中出现的字符。
+- 两阶段配置中，第二阶段从第一阶段验证集选出的模型继续训练；优化器和学习率调度器在阶段切换时重新初始化。
 
-在仓库根目录使用 PowerShell。数据审计检查只依赖 Python 标准库；若环境安装了 PyTorch，单元测试还会在临时合成数据上训练小模型，未安装时这些训练测试会跳过。不会读取本地真实数据或下载依赖；Python 3.10 及以上可用于数据审计。
+论文中的两阶段对比温度为 0.07。两阶段各分配 16 轮；ESIM 风格模型每个有标注微批为 16 对，梯度累积两次，第二阶段无标注微批与有标注微批一一对应。当前实现每轮重新打乱标注数据，不足一次完整更新的尾部不参与该轮训练，以保持每次更新的批量一致。每轮依据验证集 macro-F1 检查模型，使用 AdamW、线性预热与衰减。A3 默认掩蔽概率为 0.20，取自实验记录中验证集选定值；论文所示的测试集敏感性扫描单独报告各掩蔽概率的结果。
+
+## 目录
+
+```text
+pairmatch/        模型、数据读取、训练目标和评价指标
+scripts/          训练、预测、数据处理与分析脚本
+configs/          数据与实验配置
+tests/            功能测试
+data/agriculture_sentence_clean_v3/
+  test.jsonl      农业测试集
+  agricultural_terms.txt  农业术语表
+  manifest.json   划分信息和文件 SHA-256
+```
+
+## 环境
+
+获取仓库并进入项目目录：
 
 ```powershell
-python -B scripts/validate_configs.py
+git clone https://github.com/YRH454/wangyunkun.git
+cd wangyunkun
+```
+
+建议使用 Python 3.10 或更新版本，并按所用 CPU 或 NVIDIA GPU 安装适配的 PyTorch。其余依赖可按需安装：
+
+```powershell
+pip install torch
+pip install -r requirements-server.txt
+```
+
+在仓库根目录运行功能测试：
+
+```powershell
 python -B -m unittest discover -s tests -v
-python -B scripts/check_environment.py
 ```
 
-准备好数据访问权限后，将 `$datasetRoot` 改为本机 `data` 目录，即其下能看到 `Agriculture9_S`、`AFQMC_S` 等文件夹的目录：
+## 农业测试集
+
+测试集为 UTF-8 编码的 JSON Lines 文件，每行是一条句对。共 1,632 条，其中匹配 946 条、不匹配 686 条。
+
+| 字段 | 含义 |
+| --- | --- |
+| `sample_id` | 根据规范化句对生成的样本标识 |
+| `sentence1` | 第一个中文句子 |
+| `sentence2` | 第二个中文句子 |
+| `gold_label` | 匹配标签：`1` 为匹配，`0` 为不匹配 |
+
+测试文件 SHA-256：
+
+```text
+3b50b0f63448f564e9d6783838a836a4ad51050a0357cb88cf13149bdf5ed672
+```
+
+使用 PowerShell 可核对文件：
 
 ```powershell
-$datasetRoot = 'D:\path\to\local\data'
-$agri = Join-Path $datasetRoot 'Agriculture9_S'
-python -B scripts/audit_jsonl.py `
-  --train (Join-Path $agri 'train_50.txt') `
-  --supervised (Join-Path $agri 'train_sup_50.txt') `
-  --validation (Join-Path $agri 'dev.txt') `
-  --test (Join-Path $agri 'test.txt') `
-  --require-sentence-disjoint `
-  --output 'reports\agriculture_audit.json'
-$LASTEXITCODE
+Get-FileHash data/agriculture_sentence_clean_v3/test.jsonl -Algorithm SHA256
 ```
 
-`0` 表示该脚本的**精确检查**通过；`2` 表示发现影响所选门槛的风险；`1` 表示文件／编码／输出路径等操作失败。它不输出任何原句，报告不会覆盖已有文件。报告只包含聚合统计及文件哈希，应留在本地。
+测试集中的样本编号与标签和论文 30% 标注比例、随机种子 11 的逐句对句长分析记录对应。`manifest.json` 保存划分信息和文件摘要，不包含训练、验证或无标签样本。
 
-该工具仅核查规范化后的完整对、倒序对、单句复用、标签和子集对应关系，**不会检查语义近重复、来源级泄漏、词表拟合范围、数据授权或官方版本**。通过检查也不表示论文可以声称没有泄漏。不同任务的句序是否可交换需要人工确认；如果句序有意义，不能把倒序对自动视为同一语义，只能当作待复核的保守候选。
+## 训练
 
-## 建议的阅读顺序
+训练使用本地准备的训练集、验证集、无标注数据、标注比例子集及划分核验文件。`agricultural_terms.txt` 包含 119 个农业术语，分为作物、病害、虫害、农事操作和投入品，UTF-8 编码，每行一个术语。
 
-1. [数据集、划分和风险](docs/01_data_and_splits.md)
-2. [训练协议与公平性](docs/02_training_protocol.md)
-3. [基线、消融和资源预算](docs/03_experiment_matrix.md)
-4. [指标、统计和结果记录](docs/04_statistics_reporting.md)
-5. [Windows 目标服务器与运行环境](docs/05_windows_environment.md)
-6. [检查清单与待确认事项](docs/06_checklist.md)
-7. [实验关注点与方案对照](docs/07_experiment_coverage.md)
-8. [防泄漏划分与标注比例采样：操作说明](docs/08_clean_split_workflow.md)
-9. [独立训练器：功能、边界和运行方法](docs/09_training_implementation.md)
-10. [服务器完整操作：人工复核、预训练基线、调参、统计与画图](docs/10_server_workflow.md)
+```powershell
+python -B scripts/train_pairmatch.py --help
+```
 
-配置清单：[数据集](configs/datasets.json)、[训练协议](configs/protocol.json)、[模型候选](configs/models.json)、[基线参数](configs/baseline_protocols.json)、[实验矩阵](configs/experiment_matrix.json)、[分析配置](configs/analysis_plan.json)、[目标服务器](configs/target_server.json)。所有路径是相对于用户本地数据根目录的说明，不会从互联网自动下载或复制数据。
+两阶段模型使用 `--condition A3`；参数 `--split-dir`、`--subset-dir`、`--verification-report`、`--term-lexicon` 和 `--run-dir` 分别指定划分、标注子集、核验文件、术语表和新的输出目录。`--seed` 控制训练随机种子；相同标注比例可使用同一子集分别运行种子 `11`、`23`、`37`、`47`、`59`。`--device cuda` 使用 GPU，`--device cpu` 使用 CPU。训练前应确认输入数据的使用权限及相应复核情况，再提供程序要求的确认参数。
 
-## 本地生成新划分
+例如，下列命令会提示输入事先准备好的本地路径和该次运行的学习率：
 
-确认有权处理数据后，按照[操作说明](docs/08_clean_split_workflow.md)执行 `scripts/prepare_clean_split.py`，再用 `scripts/verify_clean_split.py` 重新读取并复核；需要不同标注比例时使用 `scripts/create_ldp_subset.py`。输出放在被忽略的 `data/` 下，不会覆盖原始文件或已有输出。
+```powershell
+$splitDir = Read-Host '输入本地数据划分目录'
+$subsetDir = Read-Host '输入标注子集目录'
+$verificationReport = Read-Host '输入划分核验文件路径'
+$runDir = Read-Host '输入新的训练输出目录'
+$learningRate = Read-Host '输入该次运行的学习率'
+$maskRate = 0.20
+$termLexicon = 'data/agriculture_sentence_clean_v3/agricultural_terms.txt'
+python -B scripts/train_pairmatch.py `
+  --split-dir $splitDir --subset-dir $subsetDir `
+  --verification-report $verificationReport `
+  --term-lexicon $termLexicon --run-dir $runDir `
+  --condition A3 --seed 11 --device cuda `
+  --temperature 0.07 --mask-rate $maskRate --learning-rate $learningRate `
+  --confirm-data-rights --confirm-reviewed-data
+```
 
-这些程序建立的是**新的重划分实验**，不能当成原论文或官方基准的原测试集结果；检查仅覆盖确切重复和定义的字符近重复，不保证语义、来源或模型预训练层面的完全独立。`scripts/review_near_candidates.py` 可导出相似度较低的本地候选供人工复核，不自动决定或删除样本。
+训练输出包括配置、数据摘要、各阶段选出的模型、训练与验证记录以及汇总结果。
+
+## 测试与指标
+
+使用训练所得最终阶段模型及其对应的划分目录执行测试：
+
+```powershell
+$checkpoint = Read-Host '输入最终阶段模型文件路径'
+$evaluationDir = Read-Host '输入新的评估输出目录'
+python -B scripts/predict_pairmatch.py `
+  --checkpoint $checkpoint --split-dir $splitDir --split test `
+  --confirm-test-locked --output-dir $evaluationDir
+```
+
+输出包括逐样本预测、匹配概率、准确率、分类别精确率、召回率、F1 和 macro-F1。macro-F1 为匹配与不匹配两个类别 F1 的算术平均值。
+
+## 引用
+
+如使用本仓库代码或测试集，请引用上文列出的论文标题及作者，并注明所使用的仓库版本。

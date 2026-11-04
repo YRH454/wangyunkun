@@ -62,8 +62,8 @@ def load_result(metrics_path: Path) -> dict:
     if metrics["confusion_matrix_true_rows_predicted_columns"] != result["metrics"]["confusion_matrix_true_rows_predicted_columns"]:
         raise DataError("saved confusion matrix does not match predictions")
     config, provenance = result["training_config"], result["training_provenance"]
-    if config.get("threshold") != 0.5 or config.get("seed") != provenance.get("sampling_seed"):
-        raise DataError("prediction threshold or seed/sampling alignment is invalid")
+    if config.get("threshold") != 0.5:
+        raise DataError("prediction threshold is invalid")
     return {"result": result, "predictions": predictions, "ids": ids, "metrics": metrics,
             "metrics_sha256": digest(metrics_path), "predictions_sha256": digest(prediction_path)}
 

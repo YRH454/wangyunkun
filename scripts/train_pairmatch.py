@@ -33,32 +33,33 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--embedding-dim", type=int, default=300)
     p.add_argument("--hidden", type=int, default=256)
     p.add_argument("--dropout", type=float, default=0.5)
-    p.add_argument("--learning-rate", type=float, default=0.0003)
+    p.add_argument("--learning-rate", type=float,
+                   help="CE/A0 defaults to 0.0005; other conditions require a value or tuning lock")
     p.add_argument("--weight-decay", type=float, default=0.01)
     p.add_argument("--tuning-lock", type=Path, help="Frozen validation-selected configuration")
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--u-batch-size", type=int, default=16)
     p.add_argument("--accumulation", type=int, default=2)
-    p.add_argument("--stage1-steps", type=int, default=None, help="Default 4000 single-stage or 2000 two-stage")
-    p.add_argument("--stage2-steps", type=int, default=2000)
-    p.add_argument("--eval-every", type=int, default=200)
+    p.add_argument("--stage1-epochs", type=int, help="Default: 32 for one stage, 16 for two stages")
+    p.add_argument("--stage2-epochs", type=int, default=16)
+    p.add_argument("--stage1-steps", type=int, help="Use step-based mode instead of epoch-based mode")
+    p.add_argument("--stage2-steps", type=int, help="Second-stage limit in step-based mode")
+    p.add_argument("--eval-every", type=int, default=200, help="Validation interval in step-based mode")
     p.add_argument("--patience", type=int, default=4)
     p.add_argument("--min-delta", type=float, default=0.0001)
     p.add_argument("--fixed-steps", action="store_true", help="Disable early stopping for predeclared matched-step controls")
-    p.add_argument("--temperature", type=float, default=0.05)
+    p.add_argument("--temperature", type=float, default=0.07)
     p.add_argument("--scl-weight", type=float, default=0.5)
     p.add_argument("--ul-weight", type=float, default=0.5)
     p.add_argument("--confidence", type=float, default=0.95, help="Pseudo-label confidence for self-training/consistency")
     p.add_argument("--teacher-ema", type=float, default=0.999, help="Mean-teacher EMA after each optimizer update")
-    p.add_argument("--mask-rate", type=float, default=0.75)
+    p.add_argument("--mask-rate", type=float, default=0.20)
     p.add_argument("--u-fraction", type=float, choices=(0.25, 0.5, 1.0), default=1.0)
     return p
 
 
 def main() -> int:
     args = parser().parse_args()
-    if args.stage1_steps is None:
-        args.stage1_steps = 4000 if len(CONDITIONS[args.condition]) == 1 else 2000
     try:
         result = train(args)
         print(f"Training complete: {result['total_executed_steps_including_rolled_back']} optimizer updates; outputs are local.")

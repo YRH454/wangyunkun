@@ -15,7 +15,7 @@ from torch.nn import functional as F
 from transformers import AutoConfig, AutoModel, AutoTokenizer
 import transformers
 
-from .data import BatchStream, DataError, digest, load_training_data
+from .data import BatchStream, DataError, FullUpdateEpochBatchStream, digest, load_training_data
 from .metrics import calculate
 from .runner import append, dump, random_seed, version_info
 
@@ -113,16 +113,22 @@ def train(args: Any) -> dict:
         raise DataError("confirm data rights, review, and pretrained model rights/revision")
     if args.model not in MODEL_IDS:
         raise DataError("unknown pretrained model")
+    epoch_mode = args.steps is None
     from .tuning import apply_lock
     tuning_lock = apply_lock(args, args.model)
+    if args.learning_rate is None:
+        args.learning_rate = {"bert_base_zh": 2e-5, "small_zh": 5e-5}.get(args.model)
+        if args.learning_rate is None:
+            raise DataError("set --learning-rate or use a tuning lock for this model")
     if args.run_dir.exists():
         raise DataError("run directory exists; refusing to overwrite")
     if any(path.resolve().is_relative_to(args.run_dir.resolve()) for path in
            (args.split_dir, args.subset_dir, args.verification_report, args.checkpoint_dir)):
         raise DataError("an input is inside the output directory")
-    if (min(args.seed, args.max_length, args.batch_size, args.accumulation, args.steps, args.eval_every,
+    if (min(args.seed, args.max_length, args.batch_size, args.accumulation, args.epochs, args.eval_every,
             args.patience, args.cpu_threads) < 1 or not all(math.isfinite(x) for x in
             (args.dropout, args.learning_rate, args.weight_decay, args.min_delta))
+            or (not epoch_mode and args.steps < 1)
             or not 0 <= args.dropout < 1 or args.learning_rate <= 0 or args.weight_decay < 0 or args.min_delta < 0):
         raise DataError("invalid training settings")
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -135,8 +141,12 @@ def train(args: Any) -> dict:
     if not has_safetensors and not args.allow_unsafe_pickle_weights:
         raise DataError("no safetensors found; pickle weights require explicit trusted-source confirmation")
     labeled, validation, _, provenance = load_training_data(args.split_dir, args.subset_dir, args.verification_report, False)
-    if provenance["sampling_seed"] != args.seed:
-        raise DataError("training seed must match the LDP sampling seed")
+    updates_per_epoch = len(labeled) // (args.batch_size * args.accumulation)
+    if epoch_mode:
+        if updates_per_epoch < 1:
+            raise DataError("labeled data must contain at least one complete optimizer batch")
+        args.steps = args.epochs * updates_per_epoch
+        args.eval_every = updates_per_epoch
     adaptation = None
     if args.model == "bert_domain_adaptation":
         from .data import read_json
@@ -166,6 +176,13 @@ def train(args: Any) -> dict:
               "seed": args.seed, "device": args.device, "dropout": args.dropout, "max_length": args.max_length,
               "learning_rate": args.learning_rate, "weight_decay": args.weight_decay, "batch_size": args.batch_size,
               "accumulation": args.accumulation, "steps": args.steps, "eval_every": args.eval_every,
+              "training_mode": "epoch" if epoch_mode else "step",
+              "epochs": args.epochs if epoch_mode else None,
+              "updates_per_epoch": updates_per_epoch if epoch_mode else None,
+              "labeled_pairs_per_epoch": (updates_per_epoch * args.batch_size * args.accumulation
+                                          if epoch_mode else None),
+              "labeled_tail_skipped_per_epoch": (len(labeled) % (args.batch_size * args.accumulation)
+                                                 if epoch_mode else None),
               "patience": args.patience, "min_delta": args.min_delta, "fixed_steps": args.fixed_steps,
               "cpu_threads": args.cpu_threads, "threshold": 0.5, "training_U_accessed": adaptation is not None,
               "source_weights_safetensors": has_safetensors,
@@ -198,7 +215,8 @@ def train(args: Any) -> dict:
         def scale(step: int) -> float:
             return (step + 1) / warmup if step < warmup else max(0.0, (args.steps - step) / max(1, args.steps - warmup))
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, scale)
-        stream = BatchStream(labeled, args.batch_size, args.seed + 1000)
+        stream = (FullUpdateEpochBatchStream(labeled, args.batch_size, args.accumulation, args.seed + 1000)
+                  if epoch_mode else BatchStream(labeled, args.batch_size, args.seed + 1000))
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
             torch.cuda.synchronize(device)
@@ -208,15 +226,16 @@ def train(args: Any) -> dict:
             model.train()
             optimizer.zero_grad(set_to_none=True)
             loss_mean = 0.0
-            for _ in range(args.accumulation):
+            micro_steps = args.accumulation
+            for _ in range(micro_steps):
                 batch = stream.next()
                 logits, _ = model(tokenize(tokenizer, batch, args.max_length, device))
                 target = torch.tensor([row["gold_label"] for row in batch], dtype=torch.long, device=device)
                 loss = F.cross_entropy(logits, target)
                 if not torch.isfinite(loss):
                     raise DataError("non-finite loss; run stopped")
-                (loss / args.accumulation).backward()
-                loss_mean += float(loss.detach().item()) / args.accumulation
+                (loss / micro_steps).backward()
+                loss_mean += float(loss.detach().item()) / micro_steps
                 exposures += len(batch)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
             learning_rate = optimizer.param_groups[0]["lr"]

@@ -16,7 +16,7 @@ from typing import Any
 import torch
 from torch.nn import functional as F
 
-from .data import BatchStream, DataError, digest, encode, load_training_data, mask_view, truncation, vocabulary
+from .data import BatchStream, DataError, FullUpdateEpochBatchStream, digest, encode, load_training_data, mask_view, truncation, vocabulary
 from .metrics import calculate
 from .model import PairESIM, batch_encode
 from .objectives import supervised_contrastive, unsupervised_contrastive
@@ -28,12 +28,27 @@ CONDITIONS = {
     "self_train": [(False, False), (False, True)], "consistency": [(False, False), (False, True)],
     "mean_teacher": [(False, False), (False, True)],
     "dropout_pretrain": [(False, True), (False, False)],
-    "A0": [(False, False), (False, False)], "A1": [(True, False), (False, False)],
+    "A0": [(False, False)], "A1": [(True, False)],
     "A2": [(False, False), (False, True)], "A3": [(True, False), (False, True)],
     "A4": [(True, True)], "A5": [(True, False), (False, True)],
     "A6": [(True, False), (False, True)], "A7": [(True, False), (False, True)],
     "A8": [(False, True), (True, False)],
 }
+
+# Treat the manuscript's character counts separately from the three special tokens.
+# These targets apply to the identified agricultural split and full-U A3 setting.
+AGRICULTURE_TRAINING_POOL_SHA256 = "e6113823517b64e8516fabf33b4c0461adb5d874b7689a4514fbe317aa443af4"
+AGRICULTURE_UNLABELED_POOL_SHA256 = "56ee8d3ad13a2f0464ebd40d4dcccaa773de7f424461593e9003c93cb8f54872"
+AGRICULTURE_PAPER_CHARACTER_COUNTS = {10: 2906, 25: 3228, 30: 3412, 50: 3758}
+
+
+def paper_character_limit(condition: str, provenance: dict[str, Any]) -> int | None:
+    """Select the manuscript target only for the identified agricultural A3 data."""
+    if (condition == "A3" and provenance.get("training_pool_sha256") == AGRICULTURE_TRAINING_POOL_SHA256
+            and provenance.get("unlabeled_sha256_expected") == AGRICULTURE_UNLABELED_POOL_SHA256
+            and provenance.get("unlabeled_mode") == "external" and provenance.get("sampling_seed") == 11):
+        return AGRICULTURE_PAPER_CHARACTER_COUNTS.get(provenance.get("labeled_percent"))
+    return None
 
 
 def dump(path: Path, value: Any) -> None:
@@ -233,8 +248,24 @@ def train(args: Any) -> dict:
         raise DataError("confirm data rights and completed/documented review before training")
     if args.condition not in CONDITIONS:
         raise DataError("unknown condition")
+    epoch_mode = args.stage1_steps is None and args.stage2_steps is None
+    if epoch_mode:
+        if args.stage1_epochs is None:
+            args.stage1_epochs = 32 if len(CONDITIONS[args.condition]) == 1 else 16
+        if min(args.stage1_epochs, args.stage2_epochs) < 1:
+            raise DataError("epoch counts must be positive")
+    else:
+        if args.stage1_steps is None:
+            args.stage1_steps = 4000 if len(CONDITIONS[args.condition]) == 1 else 2000
+        if args.stage2_steps is None:
+            args.stage2_steps = 2000
     from .tuning import apply_lock
     tuning_lock = apply_lock(args, args.condition)
+    if args.learning_rate is None:
+        if args.condition in ("ce", "A0"):
+            args.learning_rate = 0.0005
+        else:
+            raise DataError("set --learning-rate or use a tuning lock for this condition")
     if args.run_dir.exists():
         raise DataError("run directory exists; refusing to overwrite")
     resolved_out = args.run_dir.resolve()
@@ -250,8 +281,8 @@ def train(args: Any) -> dict:
             or not 0 <= args.mask_rate <= 1 or not 0.5 <= args.confidence <= 1 or not 0 <= args.teacher_ema < 1
             or min(args.scl_weight, args.ul_weight, args.min_delta) < 0
             or min(args.max_length, args.embedding_dim, args.hidden, args.batch_size, args.u_batch_size,
-                   args.accumulation, args.eval_every, args.patience, args.stage1_steps, args.stage2_steps,
-                   args.cpu_threads) < 1):
+                   args.accumulation, args.eval_every, args.patience, args.cpu_threads) < 1
+            or (not epoch_mode and min(args.stage1_steps, args.stage2_steps) < 1)):
         raise DataError("invalid training setting")
     if args.u_fraction != 1.0 and args.condition != "A7":
         raise DataError("U fraction other than 1 is reserved for A7")
@@ -271,8 +302,13 @@ def train(args: Any) -> dict:
         raise DataError("term lexicon changed while reading")
     labeled, validation, unlabeled, provenance = load_training_data(
         args.split_dir, args.subset_dir, args.verification_report, uses_u and args.condition != "A5")
-    if provenance["sampling_seed"] != args.seed:
-        raise DataError("training seed must match the LDP sampling seed")
+    updates_per_epoch = len(labeled) // (args.batch_size * args.accumulation)
+    if epoch_mode:
+        if updates_per_epoch < 1:
+            raise DataError("labeled data must contain at least one complete optimizer batch")
+        args.stage1_steps = args.stage1_epochs * updates_per_epoch
+        args.stage2_steps = args.stage2_epochs * updates_per_epoch
+        args.eval_every = updates_per_epoch
     if uses_u and args.condition == "A5":
         unlabeled = [{key: value for key, value in row.items() if key != "gold_label"} for row in labeled]
     if uses_u and args.condition == "A7":
@@ -288,19 +324,33 @@ def train(args: Any) -> dict:
     device = torch.device(args.device)
     torch.set_num_threads(args.cpu_threads)
     random_seed(args.seed)
-    vocab = vocabulary(labeled, args.max_length)
+    character_limit = paper_character_limit(args.condition, provenance)
+    vocab = vocabulary(labeled + unlabeled, args.max_length, max_characters=character_limit)
     config = {"condition": args.condition, "seed": args.seed, "device": args.device,
               "embedding_dim": args.embedding_dim, "hidden": args.hidden, "dropout": args.dropout,
               "max_length": args.max_length, "learning_rate": args.learning_rate, "weight_decay": args.weight_decay,
               "batch_size": args.batch_size, "u_batch_size": args.u_batch_size, "accumulation": args.accumulation,
               "stage1_steps": args.stage1_steps, "stage2_steps": args.stage2_steps, "eval_every": args.eval_every,
+              "training_mode": "epoch" if epoch_mode else "step",
+              "stage1_epochs": args.stage1_epochs if epoch_mode else None,
+              "stage2_epochs": args.stage2_epochs if epoch_mode else None,
+              "updates_per_epoch": updates_per_epoch if epoch_mode else None,
+              "labeled_pairs_per_epoch": (updates_per_epoch * args.batch_size * args.accumulation
+                                          if epoch_mode else None),
+              "labeled_tail_skipped_per_epoch": (len(labeled) % (args.batch_size * args.accumulation)
+                                                 if epoch_mode else None),
               "patience": args.patience, "min_delta": args.min_delta, "fixed_steps": args.fixed_steps,
               "temperature": args.temperature, "scl_weight": args.scl_weight, "ul_weight": args.ul_weight,
               "mask_rate": args.mask_rate, "u_fraction": args.u_fraction, "cpu_threads": args.cpu_threads,
               "term_lexicon_sha256": term_hash,
               "pseudo_label_confidence": args.confidence,
               "teacher_ema": args.teacher_ema,
-              "vocabulary_fitted_on": "selected_labeled_training_text_only",
+              "vocabulary_fitted_on": ("selected_labeled_and_used_unlabeled_training_text"
+                                        if unlabeled else "selected_labeled_training_text_only"),
+              "vocabulary_character_count": len(vocab) - 3,
+              "vocabulary_character_limit": character_limit,
+              "vocabulary_character_selection": ("descending_frequency_then_unicode_codepoint"
+                                                   if character_limit is not None else "all_training_characters"),
               "stages_scl_ul": CONDITIONS[args.condition], "threshold": 0.5,
               "tuning_lock": tuning_lock}
     args.run_dir.mkdir(parents=True, exist_ok=False)
@@ -345,7 +395,9 @@ def train(args: Any) -> dict:
                     return (step + 1) / warmup
                 return max(0.0, (limit - step) / max(1, limit - warmup))
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, scale)
-            stream_l = BatchStream(labeled, args.batch_size, args.seed + 1000 * stage_index)
+            stream_l = (FullUpdateEpochBatchStream(labeled, args.batch_size, args.accumulation,
+                                                  args.seed + 1000 * stage_index)
+                        if epoch_mode else BatchStream(labeled, args.batch_size, args.seed + 1000 * stage_index))
             u_pool = pseudo_pool if args.condition == "self_train" else unlabeled
             stream_u = BatchStream(u_pool, args.u_batch_size, args.seed + 1000 * stage_index + 1) if use_ul and u_pool else None
             mask_rng = random.Random(args.seed + 1000 * stage_index + 2)
@@ -395,7 +447,8 @@ def train(args: Any) -> dict:
                 model.train()
                 optimizer.zero_grad(set_to_none=True)
                 sums = {"ce": 0.0, "scl": 0.0, "ul": 0.0, "total": 0.0}
-                for _ in range(args.accumulation):
+                micro_steps = args.accumulation
+                for _ in range(micro_steps):
                     batch = stream_l.next()
                     logits, z = model(*batch_encode(pairs_for(batch, vocab, args.max_length), device))
                     labels = torch.tensor([r["gold_label"] for r in batch], dtype=torch.long, device=device)
@@ -410,7 +463,7 @@ def train(args: Any) -> dict:
                         counts["scl_valid_anchors"] += valid
                         counts["scl_zero_anchor_batches"] += int(valid == 0)
                     if stream_u:
-                        u_batch = stream_u.next()
+                        u_batch = stream_u.next(len(batch)) if epoch_mode and args.u_batch_size == args.batch_size else stream_u.next()
                         if args.condition == "self_train":
                             pseudo_logits, _ = model(*batch_encode(pairs_for(u_batch, vocab, args.max_length), device))
                             pseudo_y = torch.tensor([row["pseudo_label"] for row in u_batch], dtype=torch.long, device=device)
@@ -438,10 +491,10 @@ def train(args: Any) -> dict:
                             ul_value = float(ul.detach().item())
                     if not torch.isfinite(total):
                         raise DataError("non-finite loss; run stopped")
-                    (total / args.accumulation).backward()
+                    (total / micro_steps).backward()
                     for key, value in (("ce", float(ce.detach().item())), ("scl", scl_value),
                                        ("ul", ul_value), ("total", float(total.detach().item()))):
-                        sums[key] += value / args.accumulation
+                        sums[key] += value / micro_steps
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
                 used_learning_rate = optimizer.param_groups[0]["lr"]
                 optimizer.step()

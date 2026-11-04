@@ -34,7 +34,7 @@ class AnalysisTests(unittest.TestCase):
         self.temp.cleanup()
 
     def fixture(self, method: str, seed: int, fraction: int, probabilities: list[float],
-                labeled_hash: str | None = None) -> Path:
+                labeled_hash: str | None = None, sampling_seed: int | None = None) -> Path:
         folder = self.root / f"{method}_{seed}_{fraction}"
         folder.mkdir()
         labels = [0, 0, 1, 1]
@@ -44,7 +44,8 @@ class AnalysisTests(unittest.TestCase):
         info = {"status": "COMPLETE", "split": "test", "split_sha256": "eval-hash", "count": 4,
                 "metrics": calculate(labels, probabilities),
                 "training_config": {"condition": method, "seed": seed, "threshold": 0.5, "u_fraction": 1.0},
-                "training_provenance": {"sampling_seed": seed, "split_manifest_sha256": "parent-hash",
+                "training_provenance": {"sampling_seed": seed if sampling_seed is None else sampling_seed,
+                    "split_manifest_sha256": "parent-hash",
                     "labeled_percent": fraction, "labeled_sha256": labeled_hash or f"l-{seed}-{fraction}",
                     "unlabeled_mode": "remaining", "unlabeled_sha256_expected": f"u-{seed}-{fraction}",
                     "labeled_count": 10, "u_count_used": 4 if method == "A3" else 0,
@@ -75,6 +76,20 @@ class AnalysisTests(unittest.TestCase):
         self.assertGreater(one["resamples_missing_a_class"], 0)
         with self.assertRaises(DataError):
             paired(left, right[:1], "macro_f1")
+
+    def test_fixed_subset_can_be_evaluated_across_training_seeds(self) -> None:
+        left = [self.fixture("A3", seed, 30, [0.1, 0.2, 0.8, 0.9], "same-labeled", 11)
+                for seed in (11, 23)]
+        right = [self.fixture("ce", seed, 30, [0.1, 0.8, 0.8, 0.2], "same-labeled", 11)
+                 for seed in (11, 23)]
+        output = load_result(left[1])["result"]
+        self.assertEqual(output["training_config"]["seed"], 23)
+        self.assertEqual(output["training_provenance"]["sampling_seed"], 11)
+        report, pairs = paired(left, right, "macro_f1")
+        self.assertEqual(len(pairs), 2)
+        self.assertEqual([entry["seed"] for entry in report["seed_results"]], [11, 23])
+        plot_results.plot_ldp(left + right, "macro_f1", self.root / "fixed_subset_ldp")
+        self.assertTrue((self.root / "fixed_subset_ldp" / "figure.svg").exists())
 
     def test_rejects_prediction_or_labeled_id_tampering(self) -> None:
         left = self.fixture("A3", 11, 30, [0.1, 0.2, 0.8, 0.9])

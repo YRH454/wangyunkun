@@ -26,13 +26,16 @@ if importlib.util.find_spec("torch") is not None:
     import prepare_clean_split
     import verify_clean_split
     import predict_pairmatch
+    import plot_results
     import summarize_results
     import train_pairmatch
-    from pairmatch.data import BatchStream, DataError, load_training_data, mask_view
+    from pairmatch.data import (BatchStream, DataError, EpochBatchStream, FullUpdateEpochBatchStream,
+                                encode, load_training_data, mask_view, vocabulary)
     from pairmatch.metrics import calculate
     from pairmatch.model import PairESIM, batch_encode
     from pairmatch.objectives import supervised_contrastive, unsupervised_contrastive
-    from pairmatch.runner import CONDITIONS, make_model, pairs_for, train
+    from pairmatch.runner import (AGRICULTURE_TRAINING_POOL_SHA256, AGRICULTURE_UNLABELED_POOL_SHA256,
+                                  CONDITIONS, make_model, pairs_for, paper_character_limit, train)
     TORCH_AVAILABLE = True
 else:
     TORCH_AVAILABLE = False
@@ -76,6 +79,7 @@ class PairMatchTests(unittest.TestCase):
             "--term-lexicon", str(self.lexicon), "--stage1-steps", "2", "--stage2-steps", "2",
             "--eval-every", "1", "--batch-size", "4", "--u-batch-size", "4", "--accumulation", "1",
             "--max-length", "12", "--embedding-dim", "6", "--hidden", "4", "--dropout", "0",
+            "--learning-rate", "0.0005",
         ])
         return args
 
@@ -135,6 +139,43 @@ class PairMatchTests(unittest.TestCase):
             b, _ = model(*batch_encode(padded, torch.device("cpu")))
         self.assertTrue(torch.allclose(a[0], b[0], atol=1e-6))
 
+    def test_embedding_initialization_and_training_vocabulary(self) -> None:
+        torch.manual_seed(19)
+        model = PairESIM(1000, 30, 4, 0)
+        weights = model.embedding.weight.detach()
+        self.assertTrue(torch.equal(weights[0], torch.zeros_like(weights[0])))
+        self.assertLess(abs(weights[1:].mean().item()), 0.005)
+        self.assertAlmostEqual(weights[1:].std().item(), 0.1, delta=0.005)
+        vocab = vocabulary([{"sentence1": "甲", "sentence2": "乙"},
+                            {"sentence1": "丙", "sentence2": "丁"}], 128)
+        self.assertTrue({"甲", "乙", "丙", "丁"}.issubset(vocab))
+
+    def test_frequency_capped_vocabulary_is_deterministic_and_keeps_special_tokens(self) -> None:
+        training = [{"sentence1": "甲甲", "sentence2": "乙"},
+                    {"sentence1": "乙丙", "sentence2": "丁"}]
+        vocab = vocabulary(training, 128, max_characters=3)
+        self.assertEqual(vocab, vocabulary(list(reversed(training)), 128, max_characters=3))
+        self.assertEqual({key for key in vocab if len(key) == 1}, {"甲", "乙", "丁"})
+        self.assertEqual([vocab[key] for key in ("<pad>", "<unk>", "<mask>")], [0, 1, 2])
+        self.assertEqual(encode("丙", vocab, 128), [vocab["<unk>"]])
+        with self.assertRaisesRegex(DataError, "contain 4 distinct characters"):
+            vocabulary(training, 128, max_characters=5)
+
+    def test_paper_character_limit_only_applies_to_identified_agricultural_a3_data(self) -> None:
+        provenance = {"training_pool_sha256": AGRICULTURE_TRAINING_POOL_SHA256,
+                      "unlabeled_sha256_expected": AGRICULTURE_UNLABELED_POOL_SHA256,
+                      "unlabeled_mode": "external", "sampling_seed": 11, "labeled_percent": 30}
+        self.assertEqual(paper_character_limit("A3", provenance), 3412)
+        self.assertEqual(paper_character_limit("A3", {**provenance, "labeled_percent": 10}), 2906)
+        self.assertEqual(paper_character_limit("A3", {**provenance, "labeled_percent": 25}), 3228)
+        self.assertEqual(paper_character_limit("A3", {**provenance, "labeled_percent": 50}), 3758)
+        self.assertIsNone(paper_character_limit("A2", provenance))
+        self.assertIsNone(paper_character_limit("A3", {**provenance, "training_pool_sha256": "other"}))
+        self.assertIsNone(paper_character_limit("A3", {**provenance, "unlabeled_sha256_expected": "other"}))
+        self.assertIsNone(paper_character_limit("A3", {**provenance, "unlabeled_mode": "remaining"}))
+        self.assertIsNone(paper_character_limit("A3", {**provenance, "sampling_seed": 23}))
+        self.assertIsNone(paper_character_limit("A3", {**provenance, "labeled_percent": 15}))
+
     def test_loader_rejects_unlabeled_gold_even_with_rehashed_manifest(self) -> None:
         copied = self.root / "tampered_subset"
         shutil.copytree(self.subset, copied)
@@ -161,16 +202,80 @@ class PairMatchTests(unittest.TestCase):
         with self.assertRaises(DataError):
             train(args)
         args.term_lexicon = self.lexicon
-        args.seed = 23
-        with self.assertRaises(DataError):
-            train(args)
-        args.seed = 11
         output.mkdir()
         marker = output / "marker"
         marker.write_text("keep", encoding="utf-8")
         with self.assertRaises(DataError):
             train(args)
         self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
+
+    def test_baseline_default_and_explicit_staged_learning_rate(self) -> None:
+        ce = self.arguments(self.root / "ce_default_rate", "ce")
+        ce.learning_rate = None
+        ce.stage1_steps = 1
+        train(ce)
+        self.assertEqual(ce.learning_rate, 0.0005)
+        staged = self.arguments(self.root / "missing_staged_rate", "A3")
+        staged.learning_rate = None
+        with self.assertRaisesRegex(DataError, "set --learning-rate"):
+            train(staged)
+        self.assertFalse(staged.run_dir.exists())
+
+    def test_training_seed_can_differ_from_fixed_sampling_seed(self) -> None:
+        args = self.arguments(self.root / "independent_training_seed", "ce")
+        args.seed = 23
+        args.stage1_steps = 1
+        result = train(args)
+        self.assertEqual(result["status"], "COMPLETE")
+        config = json.loads((args.run_dir / "config.json").read_text(encoding="utf-8"))
+        provenance = json.loads((args.run_dir / "provenance.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["seed"], 23)
+        self.assertEqual(provenance["sampling_seed"], 11)
+
+    def test_epoch_stream_keeps_every_record_in_each_epoch(self) -> None:
+        data = [{"id": i} for i in range(11)]
+        stream = EpochBatchStream(data, 4, 11)
+        for _ in range(2):
+            batches = [stream.next() for _ in range(3)]
+            self.assertEqual([len(batch) for batch in batches], [4, 4, 3])
+            self.assertEqual(sorted(row["id"] for batch in batches for row in batch), list(range(11)))
+
+    def test_epoch_stream_keeps_each_optimizer_update_complete(self) -> None:
+        data = [{"id": i} for i in range(11)]
+        stream = FullUpdateEpochBatchStream(data, 2, 2, 11)
+        for _ in range(2):
+            batches = [stream.next() for _ in range(4)]
+            self.assertEqual([len(batch) for batch in batches], [2, 2, 2, 2])
+            self.assertEqual(len({row["id"] for batch in batches for row in batch}), 8)
+        with self.assertRaisesRegex(DataError, "one complete optimizer batch"):
+            FullUpdateEpochBatchStream(data[:3], 2, 2, 11)
+
+    def test_ablation_stages_and_pair_length_boundaries_match_manuscript(self) -> None:
+        self.assertEqual(CONDITIONS["A0"], [(False, False)])
+        self.assertEqual(CONDITIONS["A1"], [(True, False)])
+        self.assertEqual([analyze_errors.length_group(n) for n in (20, 21, 30, 31, 40, 41, 50, 51)],
+                         [0, 1, 1, 2, 2, 3, 3, 4])
+        interval = analyze_errors.exact_binomial_interval(458, 458)
+        self.assertEqual([round(value, 3) for value in interval], [0.992, 1.0])
+
+    def test_epoch_training_validates_once_per_epoch_and_keeps_one_to_one_batches(self) -> None:
+        args = self.arguments(self.root / "epoch_training", "A3")
+        args.stage1_steps = args.stage2_steps = None
+        args.stage1_epochs = args.stage2_epochs = 2
+        args.accumulation = 2
+        args.fixed_steps = True
+        labeled, _, unlabeled, _ = load_training_data(self.split, self.subset, self.report, True)
+        result = train(args)
+        checkpoint = torch.load(args.run_dir / result["final_checkpoint"], map_location="cpu", weights_only=True)
+        self.assertEqual(checkpoint["vocab"], vocabulary(labeled + unlabeled, args.max_length))
+        self.assertEqual(checkpoint["config"]["vocabulary_fitted_on"],
+                         "selected_labeled_and_used_unlabeled_training_text")
+        effective_batch = args.batch_size * args.accumulation
+        per_epoch = len(labeled) // effective_batch * effective_batch
+        self.assertEqual([stage["labeled_exposures"] for stage in result["stages"]], [2 * per_epoch] * 2)
+        self.assertEqual(result["stages"][1]["unlabeled_exposures"], 2 * per_epoch)
+        logs = [json.loads(line) for line in (args.run_dir / "validation_log.jsonl").read_text().splitlines()]
+        self.assertEqual([sum(row["stage"] == stage for row in logs) for stage in (1, 2)], [2, 2])
 
     def test_all_ablation_code_paths_execute_on_synthetic_data(self) -> None:
         for condition in CONDITIONS:
@@ -210,7 +315,7 @@ class PairMatchTests(unittest.TestCase):
         self.assertEqual((first.run_dir / "train_log.jsonl").read_text(), (second.run_dir / "train_log.jsonl").read_text())
 
     def test_stage_two_starts_from_stage_one_best_weights(self) -> None:
-        args = self.arguments(self.root / "transition", "A0")
+        args = self.arguments(self.root / "transition", "A2")
         args.stage2_steps = 1
         train(args)
         checkpoint = torch.load(args.run_dir / "stage_1_best.pt", map_location="cpu", weights_only=True)
@@ -254,12 +359,16 @@ class PairMatchTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             summarize_results.summarize([first, first])
         one["training_config"]["seed"] = 23
-        one["training_provenance"]["sampling_seed"] = 23
         second = self.root / "synthetic_second_metrics.json"
         second.write_text(json.dumps(one), encoding="utf-8")
         combined = summarize_results.summarize([first, second])
         self.assertEqual(combined["seeds"], [11, 23])
         self.assertEqual(combined["missing_prespecified_reporting_seeds"], [37, 47, 59])
+        one["training_provenance"]["sampling_seed"] = 23
+        second.write_text(json.dumps(one), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            summarize_results.summarize([first, second])
+        one["training_provenance"]["sampling_seed"] = 11
         one["split_sha256"] = "different"
         second.write_text(json.dumps(one), encoding="utf-8")
         with self.assertRaises(ValueError):
@@ -293,6 +402,8 @@ class PairMatchTests(unittest.TestCase):
                                          self.root / "errors", True)
         self.assertEqual(sum(row["pair_count"] for row in errors["bins"]),
                          len(predict_pairmatch.checked_rows(self.split / "test.jsonl", errors["split_sha256"], True)))
+        plot_results.plot_length(self.root / "errors" / "length_summary.json", self.root / "length_plot")
+        self.assertTrue((self.root / "length_plot" / "figure.svg").exists())
         embeddings_args = type("Args", (), {"checkpoint": pred_args.checkpoint, "split_dir": self.split,
             "split": "test", "output_dir": self.root / "embeddings", "confirm_prespecified_analysis": True,
             "max_samples": 10, "seed": 42, "batch_size": 4, "cpu_threads": 1, "device": "cpu"})()

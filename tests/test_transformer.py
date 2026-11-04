@@ -86,6 +86,7 @@ class TransformerTests(unittest.TestCase):
         self.assertEqual(checkpoint["provenance"]["u_count_used"], 0)
         self.assertTrue(checkpoint["provenance"]["test_was_not_read_during_training"])
         self.assertEqual(checkpoint["config"]["condition"], "bert_base_zh")
+        self.assertEqual(checkpoint["config"]["learning_rate"], 2e-5)
         prediction = type("Args", (), {"checkpoint": args.run_dir / result["final_checkpoint"],
                           "split_dir": self.split, "split": "test", "output_dir": self.root / "bert_test",
                           "confirm_test_locked": True, "device": "cpu", "batch_size": 4, "cpu_threads": 1})()
@@ -111,6 +112,22 @@ class TransformerTests(unittest.TestCase):
         with self.assertRaises(DataError):
             train(args)
 
+    def test_epoch_mode_uses_the_same_subset_with_another_training_seed(self) -> None:
+        args = self.arguments(self.root / "bert_epoch")
+        args.steps = None
+        args.epochs = 2
+        args.seed = 23
+        args.accumulation = 2
+        args.fixed_steps = True
+        result = train(args)
+        provenance = json.loads((args.run_dir / "provenance.json").read_text(encoding="utf-8"))
+        self.assertEqual(provenance["sampling_seed"], 11)
+        effective_batch = args.batch_size * args.accumulation
+        per_epoch = provenance["labeled_count"] // effective_batch * effective_batch
+        self.assertEqual(result["stages"][0]["labeled_exposures"], 2 * per_epoch)
+        logs = (args.run_dir / "validation_log.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(logs), 2)
+
     def test_u_only_mlm_then_supervised_finetuning(self) -> None:
         adapt_options = type("Args", (), {"split_dir": self.split, "subset_dir": self.subset,
             "verification_report": self.report, "checkpoint_dir": self.checkpoint,
@@ -126,6 +143,7 @@ class TransformerTests(unittest.TestCase):
         self.assertFalse(result["test_file_read_during_adaptation"])
         args = self.arguments(self.root / "domain_finetune")
         args.model = "bert_domain_adaptation"
+        args.learning_rate = 2e-5
         args.checkpoint_dir = adapt_options.output_dir / "adapted_model"
         fitted = train(args)
         self.assertEqual(fitted["status"], "COMPLETE")

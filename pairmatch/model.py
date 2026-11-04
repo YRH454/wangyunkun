@@ -18,6 +18,9 @@ class PairESIM(nn.Module):
     def __init__(self, vocab_size: int, embedding_dim: int = 300, hidden: int = 256, dropout: float = 0.5):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
+        nn.init.normal_(self.embedding.weight, mean=0.0, std=0.1)
+        with torch.no_grad():
+            self.embedding.weight[0].zero_()
         self.context = nn.LSTM(embedding_dim, hidden, batch_first=True, bidirectional=True)
         self.project = nn.Sequential(nn.Linear(8 * hidden, 2 * hidden), nn.ReLU())
         self.composition = nn.LSTM(2 * hidden, hidden, batch_first=True, bidirectional=True)

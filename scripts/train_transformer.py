@@ -32,13 +32,15 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--cpu-threads", type=int, default=1)
     p.add_argument("--max-length", type=int, default=128)
     p.add_argument("--dropout", type=float, default=0.1)
-    p.add_argument("--learning-rate", type=float, default=2e-5)
+    p.add_argument("--learning-rate", type=float,
+                   help="Defaults to 2e-5 for BERT-base and 5e-5 for the four-layer model")
     p.add_argument("--weight-decay", type=float, default=0.01)
     p.add_argument("--tuning-lock", type=Path, help="Frozen validation-selected configuration")
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--accumulation", type=int, default=4)
-    p.add_argument("--steps", type=int, help="Default 4000, or 2000 after U-only BERT domain adaptation")
-    p.add_argument("--eval-every", type=int, default=200)
+    p.add_argument("--epochs", type=int, default=32)
+    p.add_argument("--steps", type=int, help="Use step-based mode instead of epoch-based mode")
+    p.add_argument("--eval-every", type=int, default=200, help="Validation interval in step-based mode")
     p.add_argument("--patience", type=int, default=4)
     p.add_argument("--min-delta", type=float, default=0.0001)
     p.add_argument("--fixed-steps", action="store_true")
@@ -47,8 +49,6 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = parser().parse_args()
-    if args.steps is None:
-        args.steps = 2000 if args.model == "bert_domain_adaptation" else 4000
     try:
         result = train(args)
         print(f"Transformer training complete: {result['total_executed_steps_including_rolled_back']} optimizer updates; outputs are local.")

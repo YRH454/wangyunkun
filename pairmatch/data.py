@@ -139,6 +139,7 @@ def load_training_data(split: Path, subset: Path, report: Path, needs_external_u
         "verification_report_sha256": report_hash,
         "validation_sha256": parent["output_sha256"]["validation.jsonl"],
         "test_sha256_expected_not_read": parent["output_sha256"]["test.jsonl"],
+        "training_pool_sha256": parent["output_sha256"]["train.jsonl"],
         "labeled_sha256": child["output_sha256"]["train_labeled.jsonl"],
         "unlabeled_sha256_expected": child["output_sha256"]["train_unlabeled.jsonl"],
         "sampling_seed": child["sampling_seed"],
@@ -150,8 +151,20 @@ def load_training_data(split: Path, subset: Path, report: Path, needs_external_u
     return labeled, validation, unlabeled, meta
 
 
-def vocabulary(labeled: list[dict[str, Any]], max_length: int) -> dict[str, int]:
-    chars = {ch for row in labeled for key in ("sentence1", "sentence2") for ch in row[key][:max_length]}
+def vocabulary(training_rows: list[dict[str, Any]], max_length: int,
+               max_characters: int | None = None) -> dict[str, int]:
+    """Fit on training texts; an optional cap retains frequent characters deterministically."""
+    counts = Counter(ch for row in training_rows for key in ("sentence1", "sentence2")
+                     for ch in row[key][:max_length])
+    if max_characters is not None:
+        if type(max_characters) is not int or max_characters < 1:
+            raise DataError("the character vocabulary size must be a positive integer")
+        if len(counts) < max_characters:
+            raise DataError(f"training texts contain {len(counts)} distinct characters; "
+                            f"the requested character vocabulary contains {max_characters}")
+        chars = sorted(counts, key=lambda ch: (-counts[ch], ch))[:max_characters]
+    else:
+        chars = counts
     return {token: i for i, token in enumerate(["<pad>", "<unk>", "<mask>"] + sorted(chars))}
 
 
@@ -176,10 +189,56 @@ class BatchStream:
         self.order: list[int] = []
         self.position = 0
 
-    def next(self) -> list[dict[str, Any]]:
-        if self.position + self.size > len(self.order):
+    def next(self, size: int | None = None) -> list[dict[str, Any]]:
+        batch_size = self.size if size is None else min(size, len(self.data))
+        if batch_size < 1:
+            raise DataError("invalid microbatch size")
+        if self.position + batch_size > len(self.order):
             self.order = list(range(len(self.data)))
             self.rng.shuffle(self.order)
+            self.position = 0
+        ids = self.order[self.position:self.position + batch_size]
+        self.position += batch_size
+        return [self.data[i] for i in ids]
+
+
+class EpochBatchStream:
+    """Shuffle each epoch and retain its final, potentially partial, microbatch."""
+    def __init__(self, data: list[dict[str, Any]], size: int, seed: int):
+        if not data or size < 1:
+            raise DataError("empty data or invalid microbatch size")
+        self.data, self.size, self.rng = data, size, random.Random(seed)
+        self.order: list[int] = []
+        self.position = 0
+
+    def next(self) -> list[dict[str, Any]]:
+        if self.position >= len(self.order):
+            self.order = list(range(len(self.data)))
+            self.rng.shuffle(self.order)
+            self.position = 0
+        ids = self.order[self.position:self.position + self.size]
+        self.position += len(ids)
+        return [self.data[i] for i in ids]
+
+
+class FullUpdateEpochBatchStream:
+    """Shuffle each epoch and keep only complete accumulated updates."""
+    def __init__(self, data: list[dict[str, Any]], size: int, accumulation: int, seed: int):
+        if not data or size < 1 or accumulation < 1:
+            raise DataError("empty data or invalid microbatch/accumulation size")
+        self.data, self.size, self.rng = data, size, random.Random(seed)
+        effective_batch_size = size * accumulation
+        self.usable = len(data) // effective_batch_size * effective_batch_size
+        if not self.usable:
+            raise DataError("labeled data must contain at least one complete optimizer batch")
+        self.order: list[int] = []
+        self.position = 0
+
+    def next(self) -> list[dict[str, Any]]:
+        if self.position >= len(self.order):
+            order = list(range(len(self.data)))
+            self.rng.shuffle(order)
+            self.order = order[:self.usable]
             self.position = 0
         ids = self.order[self.position:self.position + self.size]
         self.position += self.size

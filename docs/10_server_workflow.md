@@ -1,6 +1,6 @@
 # 10. Windows 服务器操作：复核、基线、调参与统计
 
-这些命令在用户的 **Windows 10、Quadro RTX 5000 服务器**执行。仓库只提供独立实现，不是原作者代码，也没有真实结果。数据权限、生成来源、语义近重复、术语词表和预训练权重授权需要人工确认；代码中的确认开关仅是操作者声明。下面的路径均为服务器上的示例；原始数据、模型文件、预测和中间结果不要提交到公开仓库。
+这些示例面向 **Windows 10、Quadro RTX 5000 服务器**。仓库提供独立实现，代码不代表历史运行记录；确认开关是操作者对数据及模型使用权限的声明。除已公开的农业测试集和术语表外，训练数据、模型文件、预测和中间结果按其授权条件管理。
 
 建议执行顺序：核验服务器环境 → 人工复核并生成新划分 → 锁定数据版本和分析计划 → 准备各LDP → 分方法做验证集调参 → 按五种子训练 → 冻结后测试 → 配对统计、绘图和目标设备测量。每个输出目录必须不存在，失败后使用新目录，保留失败信息。
 
@@ -56,56 +56,45 @@ python -B scripts/apply_review_decisions.py apply `
 
 ## 10.3 LDP、权重和验证集自动调参
 
-每个报告种子分别生成对应的L/U子集，并使用同一个子集对比各方法。默认规定：**训练种子与LDP采样种子一致**。调参专用种子为101、比例30%；不得拿测试结果选择参数。
+农业数据的标注子集使用采样种子11分层抽取；同一LDP下，各方法和五个报告训练种子11、23、37、47、59使用同一标注子集。调参训练种子101与采样种子是不同概念；不得拿测试结果选择参数。
 
 ```powershell
 $split = 'data\agri_clean_reviewed_v1'
 $verified = Join-Path $split 'verification_report.json'
 python -B scripts/create_ldp_subset.py --split-dir $split `
-  --output-dir 'data\agri_30_seed101' --percent 30 --seed 101 --unlabeled-mode external
-python -B scripts/create_ldp_subset.py --split-dir $split `
   --output-dir 'data\agri_30_seed11' --percent 30 --seed 11 --unlabeled-mode external
 ```
 
-公开基准若使用训练池剩余样本去标签作为U，应选择 `--unlabeled-mode remaining`，并与外部生成U分开报告。其余种子为23、37、47、59。多LDP分别生成对应目录；相同种子下各比例按协议嵌套。
+公开基准使用训练池剩余样本去标签作为U，与农业外部生成U分开报告。论文的 AFQMC、LCQMC、PAWS-X 标注子集分别为3,093、20,805、4,251对，各方法使用相同的15,000对U。农业数据的九档子集按固定采样种子嵌套。
 
-独立训练器包含 `ce`、`ce_scl`、`A0`—`A8`、`self_train`、`consistency`、`mean_teacher`、`dropout_pretrain`。需要术语保护的条件必须提供真实可用的术语词表。自动调参默认每个数据集、方法跑六个候选，可能耗时很长，建议先在虚构数据上验证流程；异常候选不会被悄悄跳过。
+独立训练器包含 `ce`、`ce_scl`、`A0`—`A8`、`self_train`、`consistency` 等条件。论文明确列出的验证集候选为CE九组、BERT-base和四层RoBERTa各六组，分别由对应学习率与有效批量组合构成；每个公共数据集使用自己的验证集。具体候选见[训练协议](02_training_protocol.md)，脚本参数见 `python -B scripts/auto_tune.py --help`。
 
 ```powershell
-$terms = 'data\reviewed_agricultural_terms.txt'
-python -B scripts/auto_tune.py --method A3 --split-dir $split `
-  --subset-dir 'data\agri_30_seed101' --verification-report $verified `
-  --output-dir 'runs\tune_agri_a3' --term-lexicon $terms --device cuda `
-  --confirm-data-rights --confirm-reviewed-data
-
+$terms = 'data\agriculture_sentence_clean_v3\agricultural_terms.txt'
+$a3LearningRate = Read-Host '输入该次 A3 训练的学习率'
 python -B scripts/train_pairmatch.py --split-dir $split `
   --subset-dir 'data\agri_30_seed11' --verification-report $verified `
   --run-dir 'runs\agri_a3_30_seed11' --condition A3 --seed 11 `
-  --term-lexicon $terms --tuning-lock 'runs\tune_agri_a3\selected_lock.json' `
+  --term-lexicon $terms --temperature 0.07 --mask-rate 0.20 --learning-rate $a3LearningRate `
   --device cuda --confirm-data-rights --confirm-reviewed-data
 ```
 
-每种方法要单独调参；锁定文件记录选中参数、固定设置、实现和输入哈希。后续运行的架构、批量、步数等要与调参设置一致，参数锁自动注入学习率与weight decay；代码或词表改变后不能沿用旧锁。`--allow-nonstandard-grid` 仅供有理由的另行登记或开发测试，锁会标记非标准；不能把缩小搜索或smoke当作六组正式调参。
+其中 `0.20` 来自实验工作簿中A3的验证集选参记录；论文测试集敏感性扫描的最高点不代表验证集选值。运行时输入本次实际采用的学习率，并使用不存在的新输出目录。
 
 预训练模型请先通过合法可信的渠道在服务器准备**与配置中模型ID和完整revision对应**的本地目录，里面需要config、tokenizer和权重。核实模型和训练语料许可，尤其轻量模型的许可目前未知。优先使用 `safetensors`；若只有来自可信来源的 `.bin`，才按需要明确加 `--allow-unsafe-pickle-weights`。脚本仅本地读取并记录文件哈希，`--confirm-model-rights-and-revision` 是人工声明，不会自动证明文件来自指定revision。预训练模型利用了外部知识，应与随机初始化BiLSTM分组解释。
 
 ```powershell
 $bert = 'data\pretrained\bert_base_chinese_pinned'
-python -B scripts/auto_tune.py --method bert_base_zh --split-dir $split `
-  --subset-dir 'data\agri_30_seed101' --verification-report $verified `
-  --checkpoint-dir $bert --output-dir 'runs\tune_agri_bert' --device cuda `
-  --confirm-data-rights --confirm-reviewed-data --confirm-model-rights-and-revision
-
 python -B scripts/train_transformer.py --model bert_base_zh --checkpoint-dir $bert `
   --split-dir $split --subset-dir 'data\agri_30_seed11' --verification-report $verified `
   --run-dir 'runs\agri_bert_30_seed11' --seed 11 --device cuda `
-  --tuning-lock 'runs\tune_agri_bert\selected_lock.json' `
+  --learning-rate 0.00002 `
   --confirm-data-rights --confirm-reviewed-data --confirm-model-rights-and-revision
 ```
 
 预训练模型ID还支持 `roberta_wwm_zh` 和 `small_zh`；更换ID时必须使用相应的本地权重及独立调参锁。所选模型的 tokenizer 文件保存在运行目录，预测时无需访问网络。
 
-可选的 BERT 领域适配先在训练U上做固定步数MLM，再在同一LDP的L上微调；不读取测试文件，验证集只供划分和加载检查，不用于选MLM阶段。保护特殊token；按15%采样后使用80% `[MASK]`、10%随机token、10%不变的规则。极小微批若一个token也未选中，会强制选中一个并记录次数。每个LDP／种子必须使用对应U分别适配；记录实际U曝光、两阶段时间和GPU显存。下例是报告种子11的适配与微调；正式调参应先对seed101的同类U做适配，再使用 `auto_tune.py --method bert_domain_adaptation --checkpoint-dir <seed101适配输出的adapted_model>`，得到的参数锁用于相同适配方案的其他种子。
+可选 BERT 领域适配先在训练U上做固定步数MLM，再在同一LDP的L上微调，不作为论文已列明的三类基线调参网格。MLM保护特殊token；按15%采样后使用80% `[MASK]`、10%随机token、10%不变的规则。记录实际U曝光、两阶段时间和GPU显存；下例为种子11的独立运行。
 
 ```powershell
 python -B scripts/adapt_bert_mlm.py --checkpoint-dir $bert --split-dir $split `
@@ -117,15 +106,14 @@ python -B scripts/train_transformer.py --model bert_domain_adaptation `
   --checkpoint-dir 'runs\agri_bert_mlm_30_seed11\adapted_model' `
   --split-dir $split --subset-dir 'data\agri_30_seed11' --verification-report $verified `
   --run-dir 'runs\agri_bert_domain_30_seed11' --seed 11 --device cuda `
-  --tuning-lock 'runs\tune_agri_bert_domain\selected_lock.json' `
   --confirm-data-rights --confirm-reviewed-data --confirm-model-rights-and-revision
 ```
 
-默认MLM和下游微调各2000次更新上限；MLM阶段不早停，微调阶段验证集早停。MLM计算成本需与微调成本相加，不与仅监督模型称为计算等价。适配checkpoint绑定父划分、LDP、U哈希、种子、基础权重、代码与适配设置；不得拿其他数据集或种子的适配权重冒用。输入checkpoint若缺失MLM头，框架可能新初始化该头，应检查并记录加载日志。
+可选MLM适配默认使用固定步数且不早停；下游微调默认按轮验证并使用早停。MLM计算成本需与微调成本相加，不与仅监督模型称为计算等价。适配checkpoint绑定父划分、LDP、U哈希、种子、基础权重、代码与适配设置；不得拿其他数据集或种子的适配权重冒用。
 
 ## 10.4 冻结后预测、误差和统计
 
-按各方法的验证集锁及五种子运行训练。预先冻结比较、阈值和分析计划后，再对每个最终checkpoint测试。此处展示两条命令；后续统计需为各自其他种子生成对应结果目录。
+按各方法的验证集选定设置及五个训练种子运行训练。预先冻结比较、阈值和分析计划后，再对每个最终checkpoint测试。此处展示两条命令；后续统计需为各自其他种子生成对应结果目录。
 
 ```powershell
 python -B scripts/predict_pairmatch.py `
@@ -182,9 +170,9 @@ python -B scripts/plot_results.py ldp `
   --output-dir 'runs\fig_ldp'
 ```
 
-单seed示例只验证格式；正式图需提供所有预设比例／种子／条件的结果。长度图的Wilson区间假设正类样本独立，有来源相关性时应优先结合分组重采样解释。消融图应同时检查实际更新、U曝光及掩蔽强度，不能从不同训练成本直接归因。
+单seed示例只验证格式；正式图需提供所有预设比例／种子／条件的结果。长度图展示各组样本数、准确率和macro-F1；论文对最短组正类召回率另报告假定样本独立的精确二项区间。消融图应同时检查实际更新、U曝光及掩蔽强度，不能从不同训练成本直接归因。
 
-特征提取使用固定ID顺序和seed抽取最多1000对，两个模型在同一划分会得到相同样本。t-SNE只是描述性投影，不用于选模型或证明泛化；独立拟合的两个投影坐标轴不可直接比较。测试标签和ID仍只留本地。
+特征提取使用固定ID顺序和seed抽取最多1000对，两个模型在同一划分会得到相同样本。t-SNE只是描述性投影，不用于选模型或证明泛化；独立拟合的两个投影坐标轴不可直接比较。农业测试集及其样本ID和标签见仓库的数据目录，模型预测按授权条件管理。
 
 ```powershell
 python -B scripts/extract_embeddings.py --checkpoint 'runs\agri_a3_30_seed11\stage_2_best.pt' `

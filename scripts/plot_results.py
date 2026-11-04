@@ -195,23 +195,30 @@ def plot_length(path: Path, output: Path, tiff: bool = False) -> dict:
     if report.get("status") != "COMPLETE" or not report.get("prespecified_user_attestation"):
         raise DataError("a complete prespecified length analysis is required")
     bins = report["bins"]
-    fig, ax = plt.subplots(figsize=(3.5, 2.8), layout="constrained")
+    fig, (ax_count, ax_metric) = plt.subplots(1, 2, figsize=(6.5, 2.8), layout="constrained")
     labels = []
     for index, row in enumerate(bins):
-        upper = "∞" if row["right_exclusive"] is None else str(row["right_exclusive"])
-        labels.append(f"{row['left_inclusive']}–{upper}\nn={row['pair_count']}\npos={row['positive_count']}")
-        value, interval = row["positive_recall"], row["positive_recall_wilson_95_iid_assumption"]
-        if value is not None:
-            ax.errorbar(index, value, yerr=[[value - interval[0]], [interval[1] - value]],
-                        marker="o", markersize=4, capsize=2, color=COLORS[0])
+        upper = row["right_exclusive"]
+        lower = row["left_inclusive"]
+        if upper is None:
+            labels.append(f">{lower - 1}")
+        elif index == 0:
+            labels.append(f"≤{upper - 1}")
         else:
-            ax.text(index, 0.04, "NA", ha="center", va="bottom", fontsize=7)
-    ax.set_xticks(range(len(labels)), labels, fontsize=6)
-    ax.set_xlabel("Mean pair length (untruncated characters)")
-    ax.set_ylabel("Positive recall")
-    ax.set_ylim(0, 1.05)
-    ax.set_title("95% Wilson interval (independent-pair assumption)", fontsize=7)
-    source = {"status": "COMPLETE", "figure_contract": "Show positive recall by prespecified sentence length with counts and uncertainty.",
+            labels.append(f"{lower}–{upper - 1}")
+    x = list(range(len(bins)))
+    ax_count.bar(x, [row["pair_count"] for row in bins], color=COLORS[1])
+    for metric, color in (("accuracy", COLORS[0]), ("macro_f1", COLORS[2])):
+        values = [row["metrics"][metric] if row["metrics"] is not None else float("nan") for row in bins]
+        ax_metric.plot(x, values, marker="o", markersize=4, color=color, label=metric)
+    for ax in (ax_count, ax_metric):
+        ax.set_xticks(x, labels, fontsize=7)
+        ax.set_xlabel("Pair length (characters)")
+    ax_count.set_ylabel("Test pairs")
+    ax_metric.set_ylabel("Score")
+    ax_metric.set_ylim(0, 1.05)
+    ax_metric.legend()
+    source = {"status": "COMPLETE", "figure_contract": "Show pair counts, accuracy and macro-F1 by total sentence-pair length.",
               "archetype": "quantitative grid / subgroup interval panel", "analysis_sha256": digest(path),
               "bins": bins, "limitation": report["limitation"]}
     save(fig, output, source, tiff)
